@@ -4,6 +4,18 @@ All notable changes to `torchmodal` are documented here.
 The format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and the project adheres to [Semantic Versioning](https://semver.org/).
 
+## [Unreleased]
+
+### Fixed
+
+- **Downward conjunction inverse in `inference.upward_downward`** — the previous
+  update `U_child ← min(U_child, U_parent)` is only sound when the sibling's lower
+  bound is 1 and could otherwise exclude a child's true value (e.g. `a = 0.9,
+  b = 0.2` clamped `U_a` to `0.2`). Replaced with the general Łukasiewicz inverse
+  `U_a ← min(U_a, U_parent + 1 − L_b)` (clamped to 1), and added the sound
+  lower-bound update `L_child ← max(L_child, L_parent)`, so asserting a conjunction
+  true now propagates truth to both conjuncts. Regression tests added.
+
 ## [0.1.1] — 2026-06-09
 
 ### Added

@@ -347,17 +347,27 @@ def upward_downward(
                 max_change = max(max_change, change)
 
             elif node.ftype == FormulaType.CONJUNCTION:
-                # a ∧ b = parent: tighten a given b and parent
+                # a ∧ b = parent, with parent = max(0, a + b - 1).
+                # Sound Łukasiewicz inverses (and symmetrically for b):
+                #   a >= parent            → L_a ← max(L_a, L_parent)
+                #   a <= U_parent + 1 - b  → U_a ← min(U_a, U_parent + 1 - L_b)
+                # The previous rule U_a ← min(U_a, U_parent) is the L_b = 1
+                # special case and over-tightens otherwise (e.g. a = 0.9,
+                # b = 0.2 gives U_parent = 0.2, which would exclude a = 0.9).
                 a_name, b_name = node.children
-                # a >= parent_L - b_U + 1 (from Łukasiewicz)
-                # Not as tight, but safe inverse:
-                for child_name in [a_name, b_name]:
+                for child_name, sibling_name in [
+                    (a_name, b_name), (b_name, a_name)
+                ]:
                     old_child = bounds[child_name].clone()
-                    # Upper bound of child limited by parent's upper
-                    new_U = torch.min(old_child[..., 1], parent_b[..., 1])
-                    bounds[child_name] = torch.stack([
-                        old_child[..., 0], new_U
-                    ], dim=-1)
+                    sibling_L = bounds[sibling_name][..., 0]
+                    new_L = torch.max(old_child[..., 0], parent_b[..., 0])
+                    new_U = torch.min(
+                        old_child[..., 1],
+                        torch.clamp(
+                            parent_b[..., 1] + 1.0 - sibling_L, max=1.0
+                        ),
+                    )
+                    bounds[child_name] = torch.stack([new_L, new_U], dim=-1)
                     change = (bounds[child_name] - old_child).abs().max().item()
                     max_change = max(max_change, change)
 

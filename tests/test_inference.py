@@ -183,3 +183,60 @@ class TestInferenceGradientFlow:
         loss.backward()
         assert A.grad is not None
         assert not torch.all(A.grad == 0)
+
+
+class TestConjunctionDownwardInverse:
+    def test_downward_does_not_exclude_true_value(self):
+        """Regression: the downward conjunction inverse must not exclude
+        a child's true value when the sibling is not asserted true.
+
+        With a = 0.9 and b = 0.2 the upward pass gives
+        U_{a∧b} = min(0.9, 0.2) = 0.2; the old rule
+        U_a ← min(U_a, U_parent) clamped a's upper bound to 0.2,
+        excluding the true value 0.9. The sound Łukasiewicz inverse
+        U_a ← min(U_a, U_parent + 1 − L_b) leaves a untouched.
+        """
+        graph = FormulaGraph()
+        graph.add_atomic("a")
+        graph.add_atomic("b")
+        graph.add_conjunction("a_and_b", "a", "b")
+
+        bounds = {
+            "a": torch.tensor([[0.9, 0.9]]),
+            "b": torch.tensor([[0.2, 0.2]]),
+            "a_and_b": torch.tensor([[0.0, 1.0]]),
+        }
+
+        A = torch.eye(1)
+        result = upward_downward(graph, bounds, A)
+
+        # a's point value must survive inference unchanged.
+        assert abs(result["a"][0, 0].item() - 0.9) < 1e-6
+        assert abs(result["a"][0, 1].item() - 0.9) < 1e-6
+        assert abs(result["b"][0, 0].item() - 0.2) < 1e-6
+        assert abs(result["b"][0, 1].item() - 0.2) < 1e-6
+        # The conjunction bracket must contain the Łukasiewicz value
+        # max(0, 0.9 + 0.2 − 1) = 0.1.
+        assert result["a_and_b"][0, 0].item() <= 0.1 + 1e-6
+        assert result["a_and_b"][0, 1].item() >= 0.1 - 1e-6
+
+    def test_asserted_conjunction_propagates_truth(self):
+        """Asserting a ∧ b true ([1, 1]) must propagate L = 1 to both
+        conjuncts via the new lower-bound update L_child ← max(L_child,
+        L_parent)."""
+        graph = FormulaGraph()
+        graph.add_atomic("a")
+        graph.add_atomic("b")
+        graph.add_conjunction("a_and_b", "a", "b")
+
+        bounds = {
+            "a": torch.tensor([[0.0, 1.0]]),
+            "b": torch.tensor([[0.0, 1.0]]),
+            "a_and_b": torch.tensor([[1.0, 1.0]]),
+        }
+
+        A = torch.eye(1)
+        result = upward_downward(graph, bounds, A)
+
+        assert abs(result["a"][0, 0].item() - 1.0) < 1e-6
+        assert abs(result["b"][0, 0].item() - 1.0) < 1e-6
