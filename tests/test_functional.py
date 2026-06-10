@@ -1,42 +1,65 @@
 """Tests for torchmodal.functional."""
 
+import warnings
+
 import torch
-import pytest
 
 from torchmodal import functional as F
 
 
-class TestSoftmin:
+class TestSmoothMin:
     def test_below_true_min(self):
-        """softmin must be a lower bound on min."""
+        """smooth_min must be a lower bound on min."""
         x = torch.tensor([0.3, 0.7, 0.5])
-        result = F.softmin(x, tau=0.1)
+        result = F.smooth_min(x, tau=0.1)
         assert result.item() <= x.min().item() + 1e-6
 
     def test_converges_to_min(self):
-        """As tau -> 0, softmin -> min."""
+        """As tau -> 0, smooth_min -> min."""
         x = torch.tensor([0.3, 0.7, 0.5])
-        result = F.softmin(x, tau=0.001)
+        result = F.smooth_min(x, tau=0.001)
         assert abs(result.item() - 0.3) < 0.01
 
     def test_differentiable(self):
         x = torch.tensor([0.3, 0.7, 0.5], requires_grad=True)
-        loss = F.softmin(x, tau=0.1)
+        loss = F.smooth_min(x, tau=0.1)
         loss.backward()
         assert x.grad is not None
 
 
-class TestSoftmax:
+class TestSmoothMax:
     def test_above_true_max(self):
-        """softmax must be an upper bound on max."""
+        """smooth_max must be an upper bound on max."""
         x = torch.tensor([0.3, 0.7, 0.5])
-        result = F.softmax(x, tau=0.1)
+        result = F.smooth_max(x, tau=0.1)
         assert result.item() >= x.max().item() - 1e-6
 
     def test_converges_to_max(self):
         x = torch.tensor([0.3, 0.7, 0.5])
-        result = F.softmax(x, tau=0.001)
+        result = F.smooth_max(x, tau=0.001)
         assert abs(result.item() - 0.7) < 0.01
+
+
+class TestLegacyAliases:
+    def test_softmin_warns(self):
+        x = torch.tensor([0.3, 0.7, 0.5])
+        with warnings.catch_warnings(record=True) as w:
+            warnings.simplefilter("always")
+            result = F.softmin(x, tau=0.1)
+            assert len(w) == 1
+            assert "deprecated" in str(w[0].message).lower()
+        expected = F.smooth_min(x, tau=0.1)
+        assert torch.allclose(result, expected)
+
+    def test_softmax_warns(self):
+        x = torch.tensor([0.3, 0.7, 0.5])
+        with warnings.catch_warnings(record=True) as w:
+            warnings.simplefilter("always")
+            result = F.softmax(x, tau=0.1)
+            assert len(w) == 1
+            assert "deprecated" in str(w[0].message).lower()
+        expected = F.smooth_max(x, tau=0.1)
+        assert torch.allclose(result, expected)
 
 
 class TestConvPool:
@@ -45,6 +68,12 @@ class TestConvPool:
         x = torch.tensor([0.2, 0.8, 0.5])
         result = F.conv_pool(x, x, tau=0.1)
         assert result.item() <= x.max().item() + 0.01
+        assert result.item() >= x.min().item() - 0.01
+
+    def test_with_negative_z_upper_bound_min(self):
+        """conv_pool(x, -x) is an upper bound on min."""
+        x = torch.tensor([0.2, 0.8, 0.5])
+        result = F.conv_pool(x, -x, tau=0.1)
         assert result.item() >= x.min().item() - 0.01
 
 
@@ -59,7 +88,6 @@ class TestConnectives:
         a = torch.tensor([1.0, 0.7, 0.3])
         b = torch.tensor([1.0, 0.5, 0.2])
         result = F.conjunction(a, b)
-        # Łukasiewicz: max(0, a+b-1)
         expected = torch.tensor([1.0, 0.2, 0.0])
         assert torch.allclose(result, expected, atol=1e-6)
 
@@ -71,10 +99,8 @@ class TestConnectives:
         assert torch.allclose(result, expected, atol=1e-6)
 
     def test_implication(self):
-        # a=1, b=0 → 0 (false)
         result = F.implication(torch.tensor(1.0), torch.tensor(0.0))
         assert abs(result.item()) < 1e-6
-        # a=0, b=anything → 1 (vacuously true)
         result = F.implication(torch.tensor(0.0), torch.tensor(0.3))
         assert abs(result.item() - 1.0) < 1e-6
 
@@ -85,15 +111,13 @@ class TestNecessity:
         prop = torch.tensor([[0.9, 1.0], [0.9, 1.0], [0.9, 1.0]])
         A = torch.eye(3)
         result = F.necessity(prop, A, tau=0.1)
-        # With reflexive-only access, □ϕ ≈ ϕ per world
         assert result[:, 0].min().item() > 0.5
 
     def test_one_false_lowers_box(self):
         """If one accessible world has false ϕ, □ϕ drops."""
         prop = torch.tensor([[0.9, 1.0], [0.1, 0.2], [0.9, 1.0]])
-        A = torch.ones(3, 3)  # full access
+        A = torch.ones(3, 3)
         result = F.necessity(prop, A, tau=0.1)
-        # Lower bound should be low because world 1 is false
         assert result[0, 0].item() < 0.5
 
     def test_point_valued(self):
@@ -110,29 +134,65 @@ class TestPossibility:
         prop = torch.tensor([[0.1, 0.2], [0.9, 1.0], [0.1, 0.2]])
         A = torch.ones(3, 3)
         result = F.possibility(prop, A, tau=0.1)
-        # Upper bound should be high due to world 1
         assert result[0, 1].item() > 0.5
 
     def test_duality_upper_bound(self):
-        """♢ϕ upper ≡ ¬□¬ϕ upper — modal duality via logsumexp identity.
-
-        The identity softmax(x) = 1 - softmin(1-x) ensures exact duality
-        for the logsumexp-based bounds (U_diamond and L_box). The conv_pool
-        bounds (L_diamond and U_box) are intentionally different sound
-        approximations and need not match exactly.
-        """
+        """♢ϕ upper ≡ ¬□¬ϕ upper — modal duality via logsumexp identity."""
         prop = torch.tensor([[0.7, 0.9], [0.3, 0.5]])
         A = torch.ones(2, 2) * 0.8
         tau = 0.01
         dia = F.possibility(prop, A, tau=tau)
-        # ¬ϕ: swap and negate bounds
         neg_prop = torch.stack([1.0 - prop[:, 1], 1.0 - prop[:, 0]], dim=-1)
         box_neg = F.necessity(neg_prop, A, tau=tau)
         neg_box_neg = torch.stack(
             [1.0 - box_neg[:, 1], 1.0 - box_neg[:, 0]], dim=-1
         )
-        # Upper bounds of ♢ and ¬□¬ both use logsumexp — should match
         assert torch.allclose(dia[:, 1], neg_box_neg[:, 1], atol=0.05)
+
+
+class TestUntil:
+    def test_goal_already_true(self):
+        """If ψ is true at t=0, ϕ U ψ should be true at t=0."""
+        phi = torch.tensor([[0.0, 0.0], [0.0, 0.0], [0.0, 0.0]])
+        psi = torch.tensor([[1.0, 1.0], [0.0, 0.0], [0.0, 0.0]])
+        A = torch.triu(torch.ones(3, 3))
+        result = F.until(phi, psi, A, tau=0.1)
+        assert result[0, 0].item() >= 0.99
+
+    def test_hold_then_goal(self):
+        """ϕ holds for steps 0,1 and ψ becomes true at step 2."""
+        phi = torch.tensor([[1.0, 1.0], [1.0, 1.0], [0.0, 0.0]])
+        psi = torch.tensor([[0.0, 0.0], [0.0, 0.0], [1.0, 1.0]])
+        A = torch.triu(torch.ones(3, 3))
+        result = F.until(phi, psi, A, tau=0.1)
+        assert result[0, 0].item() >= 0.99
+
+    def test_hold_fails_before_goal(self):
+        """ϕ fails at step 1 but ψ isn't true until step 2 → Until fails."""
+        phi = torch.tensor([[1.0, 1.0], [0.0, 0.0], [0.0, 0.0]])
+        psi = torch.tensor([[0.0, 0.0], [0.0, 0.0], [1.0, 1.0]])
+        A = torch.triu(torch.ones(3, 3))
+        result = F.until(phi, psi, A, tau=0.1)
+        assert result[0, 0].item() < 0.5
+
+    def test_point_valued(self):
+        """Test with point-valued (1D) input."""
+        phi = torch.tensor([1.0, 1.0, 0.0])
+        psi = torch.tensor([0.0, 0.0, 1.0])
+        A = torch.triu(torch.ones(3, 3))
+        result = F.until(phi, psi, A, tau=0.1)
+        assert result.shape == (3,)
+
+    def test_differentiable(self):
+        """Gradients flow through the Until operator."""
+        phi = torch.tensor([[0.8, 0.9], [0.7, 0.8]], requires_grad=True)
+        psi = torch.tensor([[0.1, 0.2], [0.9, 1.0]], requires_grad=True)
+        A = torch.triu(torch.ones(2, 2))
+        result = F.until(phi, psi, A, tau=0.1)
+        loss = result.sum()
+        loss.backward()
+        assert phi.grad is not None
+        assert psi.grad is not None
 
 
 class TestContradiction:
@@ -155,7 +215,6 @@ class TestGradientFlow:
     """Verify gradients flow correctly through all operators."""
 
     def test_necessity_grad_wrt_prop_bounds(self):
-        """Gradients flow from necessity output back to proposition bounds."""
         prop = torch.tensor([[0.7, 0.9], [0.3, 0.5]], requires_grad=True)
         A = torch.ones(2, 2)
         result = F.necessity(prop, A, tau=0.1)
@@ -165,7 +224,6 @@ class TestGradientFlow:
         assert not torch.all(prop.grad == 0)
 
     def test_necessity_grad_wrt_accessibility(self):
-        """Gradients flow from necessity output back to accessibility."""
         prop = torch.tensor([[0.7, 0.9], [0.3, 0.5]])
         A = torch.ones(2, 2, requires_grad=True)
         result = F.necessity(prop, A, tau=0.1)
@@ -175,7 +233,6 @@ class TestGradientFlow:
         assert not torch.all(A.grad == 0)
 
     def test_possibility_grad_wrt_prop_bounds(self):
-        """Gradients flow from possibility output back to proposition bounds."""
         prop = torch.tensor([[0.7, 0.9], [0.3, 0.5]], requires_grad=True)
         A = torch.ones(2, 2)
         result = F.possibility(prop, A, tau=0.1)
@@ -185,7 +242,6 @@ class TestGradientFlow:
         assert not torch.all(prop.grad == 0)
 
     def test_possibility_grad_wrt_accessibility(self):
-        """Gradients flow from possibility output back to accessibility."""
         prop = torch.tensor([[0.7, 0.9], [0.3, 0.5]])
         A = torch.ones(2, 2, requires_grad=True)
         result = F.possibility(prop, A, tau=0.1)
@@ -195,7 +251,6 @@ class TestGradientFlow:
         assert not torch.all(A.grad == 0)
 
     def test_conjunction_grad(self):
-        """Gradients flow through Łukasiewicz conjunction."""
         a = torch.tensor([0.8], requires_grad=True)
         b = torch.tensor([0.7], requires_grad=True)
         result = F.conjunction(a, b)
@@ -204,7 +259,6 @@ class TestGradientFlow:
         assert b.grad is not None
 
     def test_implication_grad(self):
-        """Gradients flow through Łukasiewicz implication."""
         a = torch.tensor([0.8], requires_grad=True)
         b = torch.tensor([0.3], requires_grad=True)
         result = F.implication(a, b)
@@ -213,7 +267,6 @@ class TestGradientFlow:
         assert b.grad is not None
 
     def test_contradiction_grad(self):
-        """Gradients flow back from contradiction loss."""
         bounds = torch.tensor([[0.8, 0.3]], requires_grad=True)
         loss = F.contradiction(bounds)
         loss.backward()
@@ -221,7 +274,6 @@ class TestGradientFlow:
         assert not torch.all(bounds.grad == 0)
 
     def test_necessity_no_vanishing_grad(self):
-        """Gradients through necessity don't vanish for moderate tau."""
         prop = torch.tensor(
             [[0.6, 0.8], [0.4, 0.6], [0.7, 0.9]], requires_grad=True
         )
@@ -229,11 +281,9 @@ class TestGradientFlow:
         result = F.necessity(prop, A, tau=0.5)
         loss = result.sum()
         loss.backward()
-        # With tau=0.5 (not too sharp), gradients should be non-trivial
         assert prop.grad.abs().max().item() > 1e-4
 
     def test_possibility_no_vanishing_grad(self):
-        """Gradients through possibility don't vanish for moderate tau."""
         prop = torch.tensor(
             [[0.6, 0.8], [0.4, 0.6], [0.7, 0.9]], requires_grad=True
         )

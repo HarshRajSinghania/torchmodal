@@ -20,6 +20,12 @@ import torch.nn as nn
 import torch.optim as optim
 import numpy as np
 
+# Make sure the local development torchmodal (../torchmodal) shadows any
+# PyPI-installed release, which lacks newer APIs and fails silently.
+import sys
+from pathlib import Path
+sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
+
 import torchmodal
 from torchmodal import functional as F
 

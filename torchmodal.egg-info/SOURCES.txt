@@ -10,6 +10,7 @@ torchmodal/functional.py
 torchmodal/inference.py
 torchmodal/kripke.py
 torchmodal/losses.py
+torchmodal/py.typed
 torchmodal/systems.py
 torchmodal/utils.py
 torchmodal.egg-info/PKG-INFO

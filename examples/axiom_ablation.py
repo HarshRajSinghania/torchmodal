@@ -19,6 +19,12 @@ import torch
 import torch.optim as optim
 import numpy as np
 
+# Make sure the local development torchmodal (../torchmodal) shadows any
+# PyPI-installed release, which lacks newer APIs and fails silently.
+import sys
+from pathlib import Path
+sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
+
 import torchmodal
 from torchmodal import functional as F
 
@@ -67,9 +73,9 @@ def run_sweep(axiom_name, lambda_values):
             optimizer.zero_grad()
             A = access()
 
-            # Box operator: L_box = softmin((1 - A) + L_p) per world
+            # Box operator: L_box = smooth_min((1 - A) + L_p) per world
             impl = (1.0 - A) + L_p.unsqueeze(0)
-            L_box = F.softmin(impl, tau=0.1, dim=1)
+            L_box = F.smooth_min(impl, tau=0.1, dim=1)
 
             # Contradiction loss: L_box should not exceed U_p
             l_contra = torch.mean(torch.relu(L_box - U_p) ** 2)

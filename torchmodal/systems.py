@@ -18,7 +18,7 @@ Provides ready-to-use modules for specific modal logics:
 
 from __future__ import annotations
 
-from typing import Dict, List, Optional, Tuple
+from typing import Optional
 
 import torch
 import torch.nn as nn
@@ -127,12 +127,19 @@ class DoxasticOperator(nn.Module):
 
 
 class TemporalOperator(nn.Module):
-    r"""Temporal logic operators G (Globally) and F (Finally).
+    r"""Temporal logic operators G (Globally), F (Finally), and U (Until).
 
     - **G(ϕ)** ≡ □ϕ over temporal accessibility: ϕ holds at all future
       time steps. Uses necessity over forward-reachable states.
     - **F(ϕ)** ≡ ♢ϕ over temporal accessibility: ϕ holds at some
       future time step. Uses possibility over forward-reachable states.
+    - **U(ϕ, ψ)**: ϕ holds continuously until ψ becomes true.
+      Implemented via a backward dynamic-programming sweep using
+      Łukasiewicz connectives for differentiability.
+
+    The Until operator closes the expressiveness gap with STLCG
+    (Leung et al., IJRR 2023), which supports the full fragment of
+    signal temporal logic including Until.
 
     Args:
         num_steps: Number of discrete time steps.
@@ -144,6 +151,7 @@ class TemporalOperator(nn.Module):
         >>> A_temporal = temporal.build_forward_accessibility()
         >>> globally_phi = temporal.globally(prop_bounds, A_temporal)
         >>> finally_phi = temporal.finally_(prop_bounds, A_temporal)
+        >>> until_result = temporal.until(phi_bounds, psi_bounds, A_temporal)
     """
 
     def __init__(self, num_steps: int, tau: float = 0.1) -> None:
@@ -194,6 +202,33 @@ class TemporalOperator(nn.Module):
             Bounds for F(ϕ).
         """
         return self.diamond(prop_bounds, temporal_accessibility)
+
+    def until(
+        self,
+        phi_bounds: Tensor,
+        psi_bounds: Tensor,
+        temporal_accessibility: Tensor,
+    ) -> Tensor:
+        r"""U(ϕ, ψ) — ϕ holds continuously until ψ becomes true.
+
+        Computes the Until operator using a backward dynamic-programming
+        sweep:  ``U_t = ψ_t ∨ (ϕ_t ∧ U_{t+1})``.
+
+        This operator is essential for expressing liveness and
+        safety-with-guarantee properties that cannot be captured by
+        G (globally) and F (finally) alone.
+
+        Args:
+            phi_bounds: ``(num_steps, 2)`` or ``(num_steps,)`` — the
+                "hold" condition.
+            psi_bounds: ``(num_steps, 2)`` or ``(num_steps,)`` — the
+                "goal" condition.
+            temporal_accessibility: ``(num_steps, num_steps)``.
+
+        Returns:
+            Bounds for ϕ U ψ.
+        """
+        return F.until(phi_bounds, psi_bounds, temporal_accessibility)
 
 
 class MultiAgentKripke(nn.Module):

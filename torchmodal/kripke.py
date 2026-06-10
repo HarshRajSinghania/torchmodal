@@ -23,6 +23,7 @@ from torch import Tensor
 
 from torchmodal import functional as F
 from torchmodal.nn.accessibility import (
+    AttentionAccessibility,
     FixedAccessibility,
     LearnableAccessibility,
     MetricAccessibility,
@@ -263,12 +264,15 @@ class KripkeModel(nn.Module):
         """Compute the current accessibility matrix.
 
         Args:
-            features: Optional features for :class:`MetricAccessibility`.
+            features: Optional features for :class:`MetricAccessibility`
+                or :class:`AttentionAccessibility`.
 
         Returns:
             Accessibility matrix ``(|W|, |W|)`` in [0, 1].
         """
-        if isinstance(self.accessibility, MetricAccessibility):
+        if isinstance(
+            self.accessibility, (MetricAccessibility, AttentionAccessibility)
+        ):
             return self.accessibility(features)
         return self.accessibility()
 

@@ -9,18 +9,31 @@ connectives, and modal operators following the MLNN framework
 (Sulc, 2026) with Kripke semantics.
 
 All functions operate on tensors of truth bounds in [0, 1].
+
+.. note::
+   The aggregation operators are named ``smooth_min`` / ``smooth_max``
+   (not ``softmin`` / ``softmax``) to avoid confusion with the standard
+   probability-normalization ``torch.softmax``.  These operators are
+   *log-sum-exp* aggregations that serve as sound *bounds* on the true
+   min/max, not probability distributions.  Legacy aliases ``softmin``
+   and ``softmax`` are provided for backward compatibility.
 """
 
 from __future__ import annotations
+
+import warnings
 
 import torch
 from torch import Tensor
 
 __all__ = [
     # Differentiable aggregations
+    "smooth_min",
+    "smooth_max",
+    "conv_pool",
+    # Legacy aliases (deprecated)
     "softmin",
     "softmax",
-    "conv_pool",
     # Propositional connectives
     "negation",
     "conjunction",
@@ -29,26 +42,37 @@ __all__ = [
     # Modal operators
     "necessity",
     "possibility",
+    "until",
     # Contradiction
     "contradiction",
 ]
 
 # ---------------------------------------------------------------------------
 # Differentiable aggregations (Section 3.2.1 of the paper)
+#
+# Named smooth_min / smooth_max to avoid collision with the standard
+# torch.softmax (probability normalization), which is used internally
+# by conv_pool.  These are log-sum-exp aggregations providing sound
+# bounds on true min/max.
 # ---------------------------------------------------------------------------
 
 
-def softmin(x: Tensor, tau: float = 0.1, dim: int = -1) -> Tensor:
-    r"""Differentiable soft minimum.
+def smooth_min(x: Tensor, tau: float = 0.1, dim: int = -1) -> Tensor:
+    r"""Differentiable smooth minimum (log-sum-exp lower bound).
 
     .. math::
-        \text{softmin}_\tau(\mathbf{x}) =
+        \operatorname{smooth\_min}_\tau(\mathbf{x}) =
             -\tau \log \sum_i \exp(-x_i / \tau)
 
     This is a *sound lower bound* on :func:`torch.min`:
-    ``softmin(x) <= min(x)`` for all ``x_i \in [0, 1]``.
+    ``smooth_min(x) <= min(x)`` for all ``x_i \in [0, 1]``.
 
     As :math:`\tau \to 0`, converges to :func:`torch.min`.
+
+    .. note::
+       Not to be confused with ``torch.softmax`` (probability normalization).
+       This function computes a *scalar aggregation* via the log-sum-exp
+       identity, not a probability distribution.
 
     Args:
         x: Input tensor of truth values in [0, 1].
@@ -61,17 +85,22 @@ def softmin(x: Tensor, tau: float = 0.1, dim: int = -1) -> Tensor:
     return -tau * torch.logsumexp(-x / tau, dim=dim)
 
 
-def softmax(x: Tensor, tau: float = 0.1, dim: int = -1) -> Tensor:
-    r"""Differentiable soft maximum.
+def smooth_max(x: Tensor, tau: float = 0.1, dim: int = -1) -> Tensor:
+    r"""Differentiable smooth maximum (log-sum-exp upper bound).
 
     .. math::
-        \text{softmax}_\tau(\mathbf{x}) =
+        \operatorname{smooth\_max}_\tau(\mathbf{x}) =
             \tau \log \sum_i \exp(x_i / \tau)
 
     This is a *sound upper bound* on :func:`torch.max`:
-    ``softmax(x) >= max(x)`` for all ``x_i \in [0, 1]``.
+    ``smooth_max(x) >= max(x)`` for all ``x_i \in [0, 1]``.
 
     As :math:`\tau \to 0`, converges to :func:`torch.max`.
+
+    .. note::
+       Not to be confused with ``torch.softmax`` (probability normalization).
+       This function computes a *scalar aggregation* via the log-sum-exp
+       identity, not a probability distribution.
 
     Args:
         x: Input tensor of truth values in [0, 1].
@@ -84,22 +113,64 @@ def softmax(x: Tensor, tau: float = 0.1, dim: int = -1) -> Tensor:
     return tau * torch.logsumexp(x / tau, dim=dim)
 
 
+# Legacy aliases --------------------------------------------------------
+
+def softmin(x: Tensor, tau: float = 0.1, dim: int = -1) -> Tensor:
+    """Deprecated alias for :func:`smooth_min`."""
+    warnings.warn(
+        "torchmodal.functional.softmin is deprecated, "
+        "use smooth_min to avoid confusion with torch.softmax",
+        DeprecationWarning,
+        stacklevel=2,
+    )
+    return smooth_min(x, tau=tau, dim=dim)
+
+
+def softmax(x: Tensor, tau: float = 0.1, dim: int = -1) -> Tensor:
+    """Deprecated alias for :func:`smooth_max`."""
+    warnings.warn(
+        "torchmodal.functional.softmax is deprecated, "
+        "use smooth_max to avoid confusion with torch.softmax",
+        DeprecationWarning,
+        stacklevel=2,
+    )
+    return smooth_max(x, tau=tau, dim=dim)
+
+
 def conv_pool(
     x: Tensor, z: Tensor, tau: float = 0.1, dim: int = -1
 ) -> Tensor:
-    r"""Convex pooling operator.
+    r"""Convex pooling operator (attention-weighted average).
+
+    Computes a convex combination of ``x`` using attention weights
+    derived from ``z``:
 
     .. math::
-        \text{conv\_pool}_\tau(\mathbf{x}, \mathbf{z}) =
-            \sum_i w_i x_i, \quad w_i = \text{softmax}(z_i / \tau)
+        \operatorname{conv\_pool}_\tau(\mathbf{x}, \mathbf{z}) =
+            \sum_i w_i\, x_i, \quad
+            w_i = \frac{\exp(z_i / \tau)}{\sum_j \exp(z_j / \tau)}
 
-    When ``z = x``, provides a *lower bound* on ``max(x)``.
-    When ``z = -x``, provides an *upper bound* on ``min(x)``.
+    The weights ``w`` are a standard probability-normalized softmax
+    (``torch.softmax``) applied to the *logits* ``z / tau``.
+
+    **Bound properties** (for ``x_i \in [0, 1]``):
+
+    - ``z = x``  → the largest values receive the highest weight,
+      providing a differentiable *lower bound* on ``max(x)``.
+    - ``z = -x`` → the smallest values receive the highest weight,
+      providing a differentiable *upper bound* on ``min(x)``.
+
+    These two modes are used in the Necessity (□) and Possibility (♢)
+    operators to construct *sound* upper/lower bounds that complement
+    the ``smooth_min`` / ``smooth_max`` bounds.
 
     Args:
-        x: Values to pool.
-        z: Logits controlling the convex weights.
-        tau: Temperature. Default 0.1.
+        x: Values to pool, shape ``(..., N)``.
+        z: Logits controlling the convex weights, same shape as ``x``.
+            Use ``z = x`` for a lower bound on max, ``z = -x`` for an
+            upper bound on min.
+        tau: Temperature. Lower values sharpen the weighting toward the
+            extreme element. Default 0.1.
         dim: Dimension along which to pool. Default -1.
 
     Returns:
@@ -195,11 +266,11 @@ def necessity(
     accessibility matrix. For each world *w*:
 
     .. math::
-        L_{\Box\phi,w} = \text{softmin}_\tau \bigl\{
+        L_{\Box\phi,w} = \operatorname{smooth\_min}_\tau \bigl\{
             (1 - \tilde{A}_{w,w'}) + L_{\phi,w'} \bigr\}_{w' \in W}
 
     .. math::
-        U_{\Box\phi,w} = \text{conv\_pool}_\tau \bigl(
+        U_{\Box\phi,w} = \operatorname{conv\_pool}_\tau \bigl(
             x_{w'}, \; -x_{w'} \bigr), \quad
             x_{w'} = (1 - \tilde{A}_{w,w'}) + U_{\phi,w'}
 
@@ -228,8 +299,8 @@ def necessity(
     impl_L = (1.0 - accessibility) + L_phi.unsqueeze(0)  # broadcast target
     impl_U = (1.0 - accessibility) + U_phi.unsqueeze(0)
 
-    # Lower bound: softmin over target worlds (dim=1)
-    L_box = softmin(impl_L, tau=tau, dim=1)
+    # Lower bound: smooth_min over target worlds (dim=1)
+    L_box = smooth_min(impl_L, tau=tau, dim=1)
 
     # Upper bound: conv_pool with the negated implication as the logit (z = -x)
     U_box = conv_pool(impl_U, -impl_U, tau=tau, dim=1)
@@ -252,12 +323,12 @@ def possibility(
     Computes truth bounds for ♢ϕ across all worlds. For each world *w*:
 
     .. math::
-        L_{\Diamond\phi,w} = \text{conv\_pool}_\tau \bigl(
+        L_{\Diamond\phi,w} = \operatorname{conv\_pool}_\tau \bigl(
             x_{w'}, \; x_{w'} \bigr), \quad
             x_{w'} = \tilde{A}_{w,w'} + L_{\phi,w'} - 1
 
     .. math::
-        U_{\Diamond\phi,w} = \text{softmax}_\tau \bigl\{
+        U_{\Diamond\phi,w} = \operatorname{smooth\_max}_\tau \bigl\{
             \tilde{A}_{w,w'} + U_{\phi,w'} - 1 \bigr\}_{w' \in W}
 
     The operator acts as an "evidence scout": it activates if it finds any
@@ -285,8 +356,8 @@ def possibility(
     # Lower bound: conv_pool with the conjunction as both value and logit (z = x)
     L_dia = conv_pool(conj_L, conj_L, tau=tau, dim=1)
 
-    # Upper bound: softmax (weighted existential)
-    U_dia = softmax(conj_U, tau=tau, dim=1)
+    # Upper bound: smooth_max (weighted existential)
+    U_dia = smooth_max(conj_U, tau=tau, dim=1)
 
     result = torch.stack([L_dia, U_dia], dim=-1)
     result = torch.clamp(result, 0.0, 1.0)
@@ -296,28 +367,125 @@ def possibility(
     return result
 
 
+def until(
+    phi_bounds: Tensor,
+    psi_bounds: Tensor,
+    accessibility: Tensor,
+    tau: float = 0.1,
+) -> Tensor:
+    r"""Until (U) operator — differentiable temporal semantics.
+
+    Computes truth bounds for ``ϕ U ψ`` ("ϕ holds until ψ becomes true")
+    over a forward-time accessibility structure.  For each time step *t*:
+
+    .. math::
+        (\phi\;\mathcal{U}\;\psi)_t = \bigvee_{t' \geq t}
+            \Bigl(\psi_{t'} \;\wedge\; \bigwedge_{t \leq s < t'} \phi_s\Bigr)
+
+    The implementation uses a backward dynamic-programming sweep that
+    remains fully differentiable:
+
+    .. math::
+        U_t = \psi_t \;\lor\; (\phi_t \;\land\; U_{t+1})
+
+    with ``U_T = ψ_T`` at the final time step.  All connectives use
+    Łukasiewicz fuzzy logic (see :func:`conjunction`, :func:`disjunction`)
+    so that the computation stays in [0, 1] and gradients flow smoothly.
+
+    This closes the expressiveness gap with STLCG (Leung et al., 2023)
+    which supports the Until operator for signal temporal logic.
+
+    Args:
+        phi_bounds: Truth bounds for ϕ, shape ``(T, 2)`` or ``(T,)``.
+        psi_bounds: Truth bounds for ψ, shape ``(T, 2)`` or ``(T,)``.
+        accessibility: Forward-time accessibility matrix ``(T, T)``.
+            Only the temporal ordering matters; the matrix is used to
+            determine the number of time steps.
+        tau: Temperature (unused in the DP formulation, kept for API
+            consistency). Default 0.1.
+
+    Returns:
+        Truth bounds for ``ϕ U ψ``, same shape as inputs.
+    """
+    point_valued = phi_bounds.dim() == 1
+    if point_valued:
+        phi_bounds = phi_bounds.unsqueeze(-1).expand(-1, 2)
+        psi_bounds = psi_bounds.unsqueeze(-1).expand(-1, 2)
+
+    T = phi_bounds.shape[0]
+
+    L_phi, U_phi = phi_bounds[:, 0], phi_bounds[:, 1]
+    L_psi, U_psi = psi_bounds[:, 0], psi_bounds[:, 1]
+
+    # Build results as lists to avoid in-place ops (autograd-safe)
+    L_list: list[Tensor] = [torch.tensor(0.0)] * T
+    U_list: list[Tensor] = [torch.tensor(0.0)] * T
+
+    # Base case: at the last step, Until reduces to ψ
+    L_list[T - 1] = L_psi[T - 1]
+    U_list[T - 1] = U_psi[T - 1]
+
+    # Backward sweep: U_t = ψ_t ∨ (ϕ_t ∧ U_{t+1})
+    for t in range(T - 2, -1, -1):
+        # ϕ_t ∧ U_{t+1}  (Łukasiewicz conjunction)
+        L_continue = torch.clamp(L_phi[t] + L_list[t + 1] - 1.0, min=0.0)
+        U_continue = torch.min(U_phi[t], U_list[t + 1])
+
+        # ψ_t ∨ (ϕ_t ∧ U_{t+1})  (Łukasiewicz disjunction)
+        L_list[t] = torch.max(L_psi[t], L_continue)
+        U_list[t] = torch.clamp(U_psi[t] + U_continue, max=1.0)
+
+    result = torch.stack(
+        [torch.stack(L_list), torch.stack(U_list)], dim=-1
+    )
+
+    if point_valued:
+        return result[:, 0]
+    return result
+
+
 # ---------------------------------------------------------------------------
 # Contradiction measure
 # ---------------------------------------------------------------------------
 
 
-def contradiction(bounds: Tensor) -> Tensor:
-    r"""Compute contradiction for a set of bounds.
+def contradiction(bounds: Tensor, upper: Tensor | None = None) -> Tensor:
+    r"""Compute contradiction loss from truth bounds.
+
+    A contradiction arises when a lower bound exceeds an upper bound, an
+    inconsistency no classical truth assignment can satisfy:
 
     .. math::
-        \mathcal{L}_{\text{contra}} =
-            \sum_{w, \phi} \max(0,\; L_{\phi,w} - U_{\phi,w})
+        \mathcal{L}_{\text{contra}} = \sum \max(0,\; L - U).
 
-    A contradiction arises when the lower bound exceeds the upper bound,
-    indicating a logical inconsistency.
+    Two equivalent call forms are accepted:
+
+    - **Stacked** — ``contradiction(bounds)`` with ``bounds`` of shape
+      ``(..., 2)`` holding ``[L, U]`` on the last dimension. This is the
+      bound contradiction ``ReLU(L_phi - U_phi)``.
+    - **Split** — ``contradiction(L, U)`` with the lower and upper sources
+      passed as separate tensors of matching shape, for when they are
+      computed apart. For example ``contradiction(box, dia)`` penalises a
+      necessity that exceeds its possibility (the modal
+      ``Box phi -> Diamond phi`` consistency requirement).
+
+    The two forms agree by construction::
+
+        contradiction(L, U) == contradiction(torch.stack([L, U], dim=-1))
 
     Args:
-        bounds: Tensor of shape ``(..., 2)`` where the last dimension
-            holds ``[L, U]``.
+        bounds: Either a ``(..., 2)`` bound tensor (stacked form), or the
+            lower-bound tensor (split form, when ``upper`` is provided).
+        upper: Upper-bound tensor matching ``bounds``. If omitted,
+            ``bounds`` is read as a stacked ``[L, U]`` pair.
 
     Returns:
-        Scalar contradiction loss.
+        Scalar contradiction loss, summed over all elements.
     """
-    L = bounds[..., 0]
-    U = bounds[..., 1]
+    if upper is None:
+        L = bounds[..., 0]
+        U = bounds[..., 1]
+    else:
+        L = bounds
+        U = upper
     return torch.relu(L - U).sum()

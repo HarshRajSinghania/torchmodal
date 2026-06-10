@@ -14,13 +14,9 @@ logical consistency:
 
 from __future__ import annotations
 
-from typing import Optional
-
 import torch
 import torch.nn as nn
 from torch import Tensor
-
-from torchmodal import functional as F
 
 __all__ = [
     "ContradictionLoss",
@@ -28,6 +24,7 @@ __all__ = [
     "SparsityLoss",
     "CrystallizationLoss",
     "AxiomRegularization",
+    "SemanticLoss",
 ]
 
 
@@ -311,3 +308,120 @@ class AxiomRegularization(nn.Module):
             f"transitivity={self.transitivity}, "
             f"symmetry={self.symmetry}"
         )
+
+
+class SemanticLoss(nn.Module):
+    r"""Semantic constraint loss (Xu et al., 2018) — NeSy baseline.
+
+    Implements the *Semantic Loss* from "A Semantic Loss Function for
+    Deep Learning with Symbolic Knowledge" (Xu et al., ICML 2018).
+    This is provided as a **baseline** for comparing MLNN's modal
+    contradiction loss against non-modal neurosymbolic approaches.
+
+    For a propositional constraint ``C`` over a set of Boolean
+    variables with predicted probabilities ``p``, the semantic loss is:
+
+    .. math::
+        \mathcal{L}_{\text{semantic}} =
+            -\log \sum_{\mathbf{x} \models C}
+            \prod_i p_i^{x_i}(1 - p_i)^{1 - x_i}
+
+    This computes the negative log-probability of the constraint being
+    satisfied under the current predictions.
+
+    **Relationship to MLNN's ContradictionLoss**:
+
+    Both losses penalize logical inconsistency, but they differ in key
+    ways:
+
+    - ``SemanticLoss`` operates over propositional constraints on a
+      *single* world — it cannot natively express modal (cross-world)
+      constraints like □ϕ or ♢ϕ.
+    - ``ContradictionLoss`` operates over truth *bounds* and can
+      propagate constraints across worlds via the accessibility relation.
+    - ``SemanticLoss`` requires enumerating satisfying assignments
+      (exponential in the worst case), while ``ContradictionLoss``
+      is always polynomial.
+
+    For **mutual exclusivity** (exactly-one-of-K), the semantic loss
+    has a closed-form solution (see :meth:`forward_mutual_exclusive`).
+
+    Args:
+        reduction: ``'sum'``, ``'mean'``, or ``'none'``. Default ``'mean'``.
+
+    Example::
+
+        >>> # Mutual exclusivity: exactly one of 9 digits per cell
+        >>> sem_loss = SemanticLoss()
+        >>> probs = torch.softmax(logits, dim=-1)  # (81, 9)
+        >>> loss = sem_loss.forward_mutual_exclusive(probs)
+
+    References:
+        Xu et al., "A Semantic Loss Function for Deep Learning with
+        Symbolic Knowledge", ICML 2018.
+    """
+
+    def __init__(self, reduction: str = "mean") -> None:
+        super().__init__()
+        assert reduction in ("sum", "mean", "none")
+        self.reduction = reduction
+
+    def forward_mutual_exclusive(self, probs: Tensor) -> Tensor:
+        """Semantic loss for mutual-exclusivity constraints.
+
+        Exactly one variable in each group should be true.  This has
+        a closed-form solution that avoids assignment enumeration:
+
+        .. math::
+            \\mathcal{L} = -\\log \\sum_k p_k \\prod_{j \\neq k} (1 - p_j)
+
+        Args:
+            probs: Predicted probabilities ``(batch, K)`` in [0, 1],
+                where K is the number of mutually exclusive classes.
+
+        Returns:
+            Semantic loss (scalar or per-element).
+        """
+        eps = 1e-8
+        probs = probs.clamp(eps, 1.0 - eps)
+
+        log_probs = probs.log()
+        log_not_probs = (1.0 - probs).log()
+
+        # log Σ_k exp(log p_k + Σ_{j≠k} log(1-p_j))
+        # = log Σ_k exp(log p_k - log(1-p_k) + Σ_j log(1-p_j))
+        sum_log_not = log_not_probs.sum(dim=-1, keepdim=True)
+        per_class = log_probs - log_not_probs + sum_log_not
+        log_sat = torch.logsumexp(per_class, dim=-1)
+
+        loss = -log_sat
+
+        if self.reduction == "sum":
+            return loss.sum()
+        elif self.reduction == "mean":
+            return loss.mean()
+        return loss
+
+    def forward(
+        self,
+        probs: Tensor,
+        constraint_type: str = "mutual_exclusive",
+    ) -> Tensor:
+        """Compute semantic loss for a named constraint type.
+
+        Args:
+            probs: Predicted probabilities.
+            constraint_type: Currently supports ``"mutual_exclusive"``.
+
+        Returns:
+            Semantic loss.
+        """
+        if constraint_type == "mutual_exclusive":
+            return self.forward_mutual_exclusive(probs)
+        raise ValueError(
+            f"Unknown constraint_type '{constraint_type}'. "
+            f"Supported: 'mutual_exclusive'"
+        )
+
+    def extra_repr(self) -> str:
+        return f"reduction='{self.reduction}'"

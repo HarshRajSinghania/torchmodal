@@ -1,13 +1,14 @@
 [build-system]
-requires = ["setuptools>=68.0", "wheel"]
+requires = ["setuptools>=77.0", "wheel"]
 build-backend = "setuptools.build_meta"
 
 [project]
 name = "torchmodal"
-version = "0.1.0.6"
+version = "0.1.1"
 description = "Differentiable Modal Logic for PyTorch — Modal Logical Neural Networks (MLNNs)"
 readme = "README.md"
-license = {text = "MIT"}
+license = "MIT"
+license-files = ["LICENSE"]
 requires-python = ">=3.9"
 authors = [
     {name = "Antonin Sulc", email = "sulc.antonin@gmail.com"},
@@ -23,7 +24,6 @@ keywords = [
 classifiers = [
     "Development Status :: 3 - Alpha",
     "Intended Audience :: Science/Research",
-    "License :: OSI Approved :: MIT License",
     "Programming Language :: Python :: 3",
     "Programming Language :: Python :: 3.9",
     "Programming Language :: Python :: 3.10",
@@ -33,7 +33,7 @@ classifiers = [
 ]
 dependencies = [
     "torch>=2.0",
-    "numpy"
+    "numpy>=1.24,<3",
 ]
 
 [project.optional-dependencies]
@@ -45,12 +45,17 @@ dev = [
 ]
 
 [project.urls]
-Homepage = "https://github.com/sulcantonin/MLNN_public"
-Documentation = "https://github.com/sulcantonin/MLNN_public"
-Repository = "https://github.com/sulcantonin/MLNN_public"
+Homepage = "https://github.com/sulcantonin/torchmodal"
+Documentation = "https://github.com/sulcantonin/torchmodal#readme"
+Repository = "https://github.com/sulcantonin/torchmodal"
+Issues = "https://github.com/sulcantonin/torchmodal/issues"
+Changelog = "https://github.com/sulcantonin/torchmodal/blob/main/CHANGELOG.md"
 
 [tool.setuptools.packages.find]
 include = ["torchmodal*"]
+
+[tool.setuptools.package-data]
+torchmodal = ["py.typed"]
 
 [tool.ruff]
 line-length = 88

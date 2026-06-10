@@ -20,7 +20,7 @@ fixed point for acyclic formula graphs.
 from __future__ import annotations
 
 from enum import Enum
-from typing import Dict, List, Optional, Tuple
+from typing import Dict, List, Optional
 
 import torch
 from torch import Tensor
@@ -36,7 +36,19 @@ __all__ = [
 
 
 class FormulaType(Enum):
-    """Types of nodes in a formula graph."""
+    """Types of nodes in a formula graph.
+
+    Each type corresponds to a logical operator in the MLNN language:
+
+    - ``ATOMIC``: Leaf proposition (no children).
+    - ``NEGATION``: ¬ϕ (one child).
+    - ``CONJUNCTION``: ϕ ∧ ψ (two children), Łukasiewicz t-norm.
+    - ``DISJUNCTION``: ϕ ∨ ψ (two children), Łukasiewicz t-conorm.
+    - ``IMPLICATION``: ϕ → ψ (two children), Łukasiewicz implication.
+    - ``NECESSITY``: □ϕ (one child), aggregates over accessible worlds.
+    - ``POSSIBILITY``: ♢ϕ (one child), aggregates over accessible worlds.
+    - ``UNTIL``: ϕ U ψ (two children), backward DP over time steps.
+    """
 
     ATOMIC = "atomic"
     NEGATION = "neg"
@@ -45,6 +57,7 @@ class FormulaType(Enum):
     IMPLICATION = "implies"
     NECESSITY = "box"
     POSSIBILITY = "diamond"
+    UNTIL = "until"
 
 
 class FormulaNode:
@@ -154,6 +167,47 @@ class FormulaGraph:
         self._invalidate_cache()
         return node
 
+    def add_until(
+        self, name: str, hold: str, goal: str
+    ) -> FormulaNode:
+        """Add an Until node: hold U goal.
+
+        ``hold`` must remain true until ``goal`` becomes true.
+        """
+        node = FormulaNode(name, FormulaType.UNTIL, [hold, goal])
+        self.nodes[name] = node
+        self._invalidate_cache()
+        return node
+
+    def is_acyclic(self) -> bool:
+        """Check whether the formula graph is a DAG.
+
+        The upward-downward inference algorithm requires an acyclic
+        dependency graph (Theorem 2 in the paper).  Call this method
+        to verify the invariant before running inference.
+
+        Returns:
+            ``True`` if the graph is acyclic, ``False`` otherwise.
+        """
+        WHITE, GRAY, BLACK = 0, 1, 2
+        color = {name: WHITE for name in self.nodes}
+
+        def has_cycle(name: str) -> bool:
+            color[name] = GRAY
+            for child in self.nodes[name].children:
+                if child not in color:
+                    continue
+                if color[child] == GRAY:
+                    return True
+                if color[child] == WHITE and has_cycle(child):
+                    return True
+            color[name] = BLACK
+            return False
+
+        return not any(
+            has_cycle(n) for n in self.nodes if color[n] == WHITE
+        )
+
     def topological_order(self) -> List[str]:
         """Compute topological order (leaves first)."""
         if self._topo_cache is not None:
@@ -255,6 +309,11 @@ def upward_downward(
             elif node.ftype == FormulaType.POSSIBILITY:
                 child_b = bounds[node.children[0]]
                 new_b = F.possibility(child_b, accessibility, tau=tau)
+
+            elif node.ftype == FormulaType.UNTIL:
+                hold_b = bounds[node.children[0]]
+                goal_b = bounds[node.children[1]]
+                new_b = F.until(hold_b, goal_b, accessibility, tau=tau)
 
             else:
                 continue

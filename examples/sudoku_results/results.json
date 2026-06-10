@@ -1,0 +1,235 @@
+{
+  "config": {
+    "smoke": true,
+    "n_puzzles": 2,
+    "mlnn_seeds": 2,
+    "mlnn_epochs": 600,
+    "tiers": {
+      "easy": 42,
+      "medium": 32,
+      "hard": 26
+    }
+  },
+  "results": {
+    "Backtracking(MRV)": {
+      "family": "exact",
+      "tiers": {
+        "easy": {
+          "solve_rate": 1.0,
+          "cell_acc": 1.0,
+          "time_s": 0.06253588199615479
+        },
+        "medium": {
+          "solve_rate": 1.0,
+          "cell_acc": 1.0,
+          "time_s": 0.009241938591003418
+        },
+        "hard": {
+          "solve_rate": 1.0,
+          "cell_acc": 1.0,
+          "time_s": 0.0520625114440918
+        }
+      }
+    },
+    "OR-Tools CP-SAT": {
+      "family": "exact",
+      "tiers": {
+        "easy": {
+          "solve_rate": 1.0,
+          "cell_acc": 1.0,
+          "time_s": 0.9405065774917603
+        },
+        "medium": {
+          "solve_rate": 1.0,
+          "cell_acc": 1.0,
+          "time_s": 0.006794095039367676
+        },
+        "hard": {
+          "solve_rate": 1.0,
+          "cell_acc": 1.0,
+          "time_s": 0.017266511917114258
+        }
+      }
+    },
+    "Z3 (SMT)": {
+      "family": "exact",
+      "tiers": {
+        "easy": {
+          "solve_rate": 1.0,
+          "cell_acc": 1.0,
+          "time_s": 0.1575465202331543
+        },
+        "medium": {
+          "solve_rate": 1.0,
+          "cell_acc": 1.0,
+          "time_s": 0.20948946475982666
+        },
+        "hard": {
+          "solve_rate": 1.0,
+          "cell_acc": 1.0,
+          "time_s": 1.9747364521026611
+        }
+      }
+    },
+    "PycoSAT (SAT)": {
+      "family": "exact",
+      "tiers": {
+        "easy": {
+          "solve_rate": 1.0,
+          "cell_acc": 1.0,
+          "time_s": 0.2899589538574219
+        },
+        "medium": {
+          "solve_rate": 1.0,
+          "cell_acc": 1.0,
+          "time_s": 0.09547245502471924
+        },
+        "hard": {
+          "solve_rate": 1.0,
+          "cell_acc": 1.0,
+          "time_s": 0.04276859760284424
+        }
+      }
+    },
+    "python-constraint": {
+      "family": "exact",
+      "tiers": {
+        "easy": {
+          "solve_rate": 1.0,
+          "cell_acc": 1.0,
+          "time_s": 0.013562440872192383
+        },
+        "medium": {
+          "solve_rate": 1.0,
+          "cell_acc": 1.0,
+          "time_s": 0.03676295280456543
+        },
+        "hard": {
+          "solve_rate": 1.0,
+          "cell_acc": 1.0,
+          "time_s": 0.11676084995269775
+        }
+      }
+    },
+    "Propagation-only": {
+      "family": "propagation",
+      "tiers": {
+        "easy": {
+          "solve_rate": 1.0,
+          "cell_acc": 1.0,
+          "time_s": 0.008861541748046875
+        },
+        "medium": {
+          "solve_rate": 1.0,
+          "cell_acc": 1.0,
+          "time_s": 0.055644989013671875
+        },
+        "hard": {
+          "solve_rate": 0.5,
+          "cell_acc": 0.7160493827160493,
+          "time_s": 0.265109658241272
+        }
+      }
+    },
+    "SimulatedAnnealing": {
+      "family": "metaheuristic",
+      "tiers": {
+        "easy": {
+          "solve_rate": 1.0,
+          "cell_acc": 1.0,
+          "time_s": 2.4833719730377197
+        },
+        "medium": {
+          "solve_rate": 0.5,
+          "cell_acc": 0.9444444444444444,
+          "time_s": 6.554379343986511
+        },
+        "hard": {
+          "solve_rate": 0.0,
+          "cell_acc": 0.5679012345679013,
+          "time_s": 10.614998459815979
+        }
+      }
+    },
+    "Min-Conflicts": {
+      "family": "metaheuristic",
+      "tiers": {
+        "easy": {
+          "solve_rate": 1.0,
+          "cell_acc": 1.0,
+          "time_s": 0.23007047176361084
+        },
+        "medium": {
+          "solve_rate": 0.0,
+          "cell_acc": 0.9012345679012346,
+          "time_s": 14.163550972938538
+        },
+        "hard": {
+          "solve_rate": 0.0,
+          "cell_acc": 0.6851851851851851,
+          "time_s": 11.265335440635681
+        }
+      }
+    },
+    "MLNN (modal, ours)": {
+      "family": "differentiable",
+      "tiers": {
+        "easy": {
+          "solve_rate": 1.0,
+          "cell_acc": 1.0,
+          "time_s": 10.679638862609863
+        },
+        "medium": {
+          "solve_rate": 0.0,
+          "cell_acc": 0.8641975308641975,
+          "time_s": 22.359546661376953
+        },
+        "hard": {
+          "solve_rate": 0.0,
+          "cell_acc": 0.6790123456790123,
+          "time_s": 23.10784947872162
+        }
+      }
+    },
+    "SemanticLoss": {
+      "family": "differentiable",
+      "tiers": {
+        "easy": {
+          "solve_rate": 1.0,
+          "cell_acc": 1.0,
+          "time_s": 12.799580454826355
+        },
+        "medium": {
+          "solve_rate": 1.0,
+          "cell_acc": 1.0,
+          "time_s": 16.31145465373993
+        },
+        "hard": {
+          "solve_rate": 0.5,
+          "cell_acc": 0.7654320987654322,
+          "time_s": 22.830025553703308
+        }
+      }
+    },
+    "Soft-nonmodal(abl.)": {
+      "family": "differentiable",
+      "tiers": {
+        "easy": {
+          "solve_rate": 1.0,
+          "cell_acc": 1.0,
+          "time_s": 3.9506053924560547
+        },
+        "medium": {
+          "solve_rate": 0.5,
+          "cell_acc": 0.8950617283950617,
+          "time_s": 4.6374287605285645
+        },
+        "hard": {
+          "solve_rate": 0.0,
+          "cell_acc": 0.654320987654321,
+          "time_s": 6.468562006950378
+        }
+      }
+    }
+  }
+}

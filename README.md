@@ -1,5 +1,10 @@
 ![](https://github.com/sulcantonin/torchmodal/blob/main/misc/torchmodal.png)
 
+[![PyPI](https://img.shields.io/pypi/v/torchmodal)](https://pypi.org/project/torchmodal/)
+[![CI](https://github.com/sulcantonin/torchmodal/actions/workflows/ci.yml/badge.svg)](https://github.com/sulcantonin/torchmodal/actions/workflows/ci.yml)
+[![License: MIT](https://img.shields.io/badge/License-MIT-yellow.svg)](LICENSE)
+[![Python](https://img.shields.io/pypi/pyversions/torchmodal)](https://pypi.org/project/torchmodal/)
+
 **Differentiable Modal Logic for PyTorch**
 
 A PyTorch library implementing Modal Logical Neural Networks (MLNNs) — the first framework enabling differentiable reasoning over necessity and possibility by integrating neural networks with Kripke semantics from modal logic.
@@ -11,6 +16,14 @@ A PyTorch library implementing Modal Logical Neural Networks (MLNNs) — the fir
 ```bash
 pip install torchmodal
 ```
+
+Or from a checkout (recommended while a release is pending, since features land here first):
+
+```bash
+pip install -e .
+```
+
+See [CHANGELOG.md](CHANGELOG.md) for what each release contains.
 
 ## Quick Start
 
@@ -46,12 +59,12 @@ torchmodal/
 ├── __init__.py          # Public API
 ├── functional.py        # Stateless functional operators (like torch.nn.functional)
 ├── nn/
-│   ├── operators.py     # Softmin, Softmax, ConvPool modules
+│   ├── operators.py     # SmoothMin, SmoothMax, ConvPool modules
 │   ├── connectives.py   # Negation, Conjunction, Disjunction, Implication
 │   ├── modal.py         # Necessity (□), Possibility (♢) neurons
-│   └── accessibility.py # Fixed, Learnable, Metric accessibility relations
+│   └── accessibility.py # Fixed, Learnable, Metric, Attention accessibility relations
 ├── kripke.py            # KripkeModel, Proposition
-├── losses.py            # ContradictionLoss, ModalLoss, SparsityLoss, CrystallizationLoss
+├── losses.py            # ContradictionLoss, ModalLoss, SparsityLoss, CrystallizationLoss, SemanticLoss
 ├── inference.py         # Upward-downward bound propagation
 ├── systems.py           # EpistemicOperator, DoxasticOperator, TemporalOperator, MultiAgentKripke
 └── utils.py             # Temperature annealing, accessibility builders, decoding
@@ -71,12 +84,17 @@ A Kripke model M = ⟨W, R, V⟩ is realized as differentiable tensors:
 
 | Operator | Symbol | Semantics | Implementation |
 |----------|--------|-----------|----------------|
-| Necessity | □ | True in *all* accessible worlds | `softmin` over weighted implications |
-| Possibility | ♢ | True in *some* accessible world | `softmax` over weighted conjunctions |
+| Necessity | □ | True in *all* accessible worlds | `smooth_min` over weighted implications |
+| Possibility | ♢ | True in *some* accessible world | `smooth_max` over weighted conjunctions |
+| Until | U | ϕ holds until ψ becomes true | backward DP sweep `U_t = ψ_t ∨ (ϕ_t ∧ U_{t+1})` |
 | Knowledge | K_a | Agent *a* knows ϕ | □ restricted to agent's row |
 | Belief | B_a | Agent *a* believes ϕ | □ with non-reflexive access |
 | Globally | G | ϕ at all future times | □ over temporal accessibility |
 | Finally | F | ϕ at some future time | ♢ over temporal accessibility |
+
+> Aggregators are named `smooth_min` / `smooth_max` (not `softmin` / `softmax`) to avoid
+> confusion with the probability-normalizing `torch.softmax`; the old names remain as
+> deprecated aliases.
 
 ### Accessibility Relations
 
@@ -90,6 +108,10 @@ access = nn.LearnableAccessibility(num_worlds=7, init_bias=-2.0)
 
 # Metric learning (scales to 20,000+ worlds)
 access = nn.MetricAccessibility(num_worlds=10000, embed_dim=64)
+
+# Attention-based (rich per-world features, asymmetric relations)
+access = nn.AttentionAccessibility(input_dim=384, num_heads=4)
+A = access(features)  # features: (num_worlds, 384)
 ```
 
 ### Loss Functions
@@ -104,6 +126,10 @@ sparse_loss = torchmodal.SparsityLoss(lambda_sparse=0.05)
 
 # Crystallization for SAT mode (forces crisp 0/1 assignments)
 crystal_loss = torchmodal.CrystallizationLoss()
+
+# Semantic Loss baseline (Xu et al. 2018), incl. mutual-exclusion constraints
+sem = torchmodal.SemanticLoss()
+loss = sem.forward_mutual_exclusive(probs)  # "exactly one of k" per row
 ```
 
 ## Examples
@@ -126,6 +152,10 @@ python examples/sudoku.py
 | [`dialect_classification.py`](examples/dialect_classification.py) | □, ♢ thresholds | OOD detection — 89% Neutral recall trained only on AmE/BrE |
 | [`axiom_ablation.py`](examples/axiom_ablation.py) | T, 4, B axioms | Effect of reflexivity/transitivity/symmetry on structure learning |
 | [`scalability_ring.py`](examples/scalability_ring.py) | □, ♢ | Ring structure recovery with tau/top-k/learnable ablation |
+| [`graph_coloring_benchmark.py`](examples/graph_coloring_benchmark.py) | ⋀_c(p_c → ¬♢p_c) | 12-solver comparison on planted-colourable graphs + inductive constraint-graph recovery (edge AUC 1.0) |
+| [`sudoku_benchmark.py`](examples/sudoku_benchmark.py) | □, CSP | Sudoku solver benchmark (peer-graph special case of colouring) |
+| [`baseline_comparison.py`](examples/baseline_comparison.py) | — | Side-by-side differentiable baselines (Semantic Loss, soft non-modal penalty) |
+| [`MLNN_AccesbilityScalabilityAblation.ipynb`](examples/MLNN_AccesbilityScalabilityAblation.ipynb) | □, ♢ | Dense vs. metric accessibility sweep, N = 20 → 20,000 worlds on one GPU |
 
 ### Epistemic Trust Learning (CaSiNo / Diplomacy)
 

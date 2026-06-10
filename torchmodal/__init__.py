@@ -8,23 +8,26 @@ integrating neural networks with Kripke semantics from modal logic.
 
 The library provides:
 
-- **Differentiable modal operators**: □ (necessity) and ♢ (possibility)
-  as neural network modules that aggregate truth values across possible
-  worlds.
+- **Differentiable modal operators**: □ (necessity), ♢ (possibility),
+  and U (until) as neural network modules that aggregate truth values
+  across possible worlds.
 
 - **Flexible accessibility relations**: Fixed, learnable (direct matrix),
-  and scalable metric-learning parameterizations.
+  metric-learning, and attention-based parameterizations.
 
 - **Kripke model management**: Complete framework for managing worlds,
   propositions, and formula evaluation.
 
 - **Higher-level modal systems**: Ready-to-use epistemic (K_a),
-  doxastic (B_a), and temporal (G, F) logic operators.
+  doxastic (B_a), and temporal (G, F, U) logic operators.
 
 - **Loss functions**: Contradiction loss, combined modal loss,
-  sparsity regularization, and crystallization loss.
+  sparsity regularization, crystallization loss, and a SemanticLoss
+  baseline (Xu et al., 2018) for comparison with non-modal NeSy
+  approaches.
 
-- **Inference**: Upward-downward bound propagation algorithm.
+- **Inference**: Upward-downward bound propagation algorithm with
+  cycle detection.
 
 Quick Start::
 
@@ -48,43 +51,43 @@ Quick Start::
     # Compute contradiction loss
     loss = model.contradiction_loss()
 
-Reference: Sulc (2026), "Modal Logical Neural Networks", ICML.
+Reference: Sulc (2026), "Modal Logical Neural Networks", NeuS.
 """
 
-__version__ = "0.1.0"
+__version__ = "0.1.1"
 
 # Core functional API
-from torchmodal import functional
-from torchmodal import nn
-
-# High-level modules
-from torchmodal.kripke import KripkeModel, Proposition
-from torchmodal.losses import (
-    ContradictionLoss,
-    ModalLoss,
-    SparsityLoss,
-    CrystallizationLoss,
-    AxiomRegularization,
-)
+from torchmodal import functional, nn
 from torchmodal.inference import (
     FormulaGraph,
     FormulaNode,
     FormulaType,
     upward_downward,
 )
+
+# High-level modules
+from torchmodal.kripke import KripkeModel, Proposition
+from torchmodal.losses import (
+    AxiomRegularization,
+    ContradictionLoss,
+    CrystallizationLoss,
+    ModalLoss,
+    SemanticLoss,
+    SparsityLoss,
+)
 from torchmodal.systems import (
-    EpistemicOperator,
     DoxasticOperator,
-    TemporalOperator,
+    EpistemicOperator,
     MultiAgentKripke,
+    TemporalOperator,
 )
 from torchmodal.utils import (
     anneal_temperature,
+    bounds_to_labels,
+    build_grid_accessibility,
     build_ring_accessibility,
     build_sudoku_accessibility,
-    build_grid_accessibility,
     decode_one_hot,
-    bounds_to_labels,
 )
 
 __all__ = [
@@ -102,6 +105,7 @@ __all__ = [
     "SparsityLoss",
     "CrystallizationLoss",
     "AxiomRegularization",
+    "SemanticLoss",
     # Inference
     "FormulaGraph",
     "FormulaNode",

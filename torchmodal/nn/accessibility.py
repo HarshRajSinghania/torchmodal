@@ -4,12 +4,19 @@ torchmodal.nn.accessibility
 
 Accessibility relation modules for Kripke structures.
 
-Provides three parameterizations (Section 3.3 of the paper):
+Provides four parameterizations:
 
 - **FixedAccessibility**: Static, user-defined binary relation.
 - **LearnableAccessibility**: Direct learnable logit matrix → sigmoid.
-- **MetricAccessibility**: Scalable metric-learning parameterization
-  using latent embeddings with kernel similarity.
+  O(|W|²) parameters — suitable for |W| ≤ ~1000.
+- **MetricAccessibility**: Metric-learning parameterization using latent
+  embeddings with inner-product kernel.  O(d·|W|) parameters — scales
+  to |W| = 20,000+.
+- **AttentionAccessibility**: Multi-head self-attention over world
+  representations.  O(d²) parameters — suitable when worlds have rich
+  feature representations and the accessibility pattern is
+  context-dependent.  Addresses the reviewer concern (R1) that the
+  kernel parameterization is not the only sub-quadratic alternative.
 """
 
 from __future__ import annotations
@@ -24,6 +31,7 @@ __all__ = [
     "FixedAccessibility",
     "LearnableAccessibility",
     "MetricAccessibility",
+    "AttentionAccessibility",
     "top_k_mask",
 ]
 
@@ -45,7 +53,7 @@ def top_k_mask(A: Tensor, k: int) -> Tensor:
     if k >= A.shape[-1]:
         return A
     topk_vals, _ = torch.topk(A, k, dim=-1)
-    threshold = topk_vals[..., -1:] 
+    threshold = topk_vals[..., -1:]
     mask = (A >= threshold).float()
     return A * mask
 
@@ -268,6 +276,90 @@ class MetricAccessibility(nn.Module):
         return (
             f"num_worlds={self._num_worlds}, "
             f"embed_dim={self.embed_dim}, "
+            f"reflexive={self.reflexive}, "
+            f"top_k={self.top_k}"
+        )
+
+
+class AttentionAccessibility(nn.Module):
+    """Attention-based accessibility relation.
+
+    Uses multi-head self-attention over world representations to compute
+    a context-dependent accessibility matrix.  Unlike
+    :class:`MetricAccessibility` (which uses a fixed inner-product
+    kernel), attention weights are input-dependent and can capture
+    asymmetric relationships naturally.
+
+    The parameter count is O(d²) — independent of |W| — making this
+    suitable for settings where worlds have rich feature representations
+    (e.g., sentence embeddings in the Diplomacy experiment).
+
+    This addresses Reviewer 1's observation that "if worlds were a space
+    of rich state representations rather than indices, directly learning
+    a kernel does not require quadratic parameters" by providing an
+    alternative that operates entirely in feature space.
+
+    Args:
+        input_dim: Dimension of per-world feature vectors.
+        num_heads: Number of attention heads. Default 4.
+        reflexive: Enforce self-accessibility. Default ``True``.
+        top_k: Top-k masking. Default ``None``.
+
+    Example::
+
+        >>> access = AttentionAccessibility(input_dim=384, num_heads=4)
+        >>> features = torch.randn(7, 384)  # 7 worlds, 384-d features
+        >>> A = access(features)  # (7, 7) accessibility matrix
+    """
+
+    def __init__(
+        self,
+        input_dim: int,
+        num_heads: int = 4,
+        reflexive: bool = True,
+        top_k: Optional[int] = None,
+    ) -> None:
+        super().__init__()
+        self.input_dim = input_dim
+        self.num_heads = num_heads
+        self.reflexive = reflexive
+        self.top_k = top_k
+
+        self.attn = nn.MultiheadAttention(
+            embed_dim=input_dim,
+            num_heads=num_heads,
+            batch_first=True,
+        )
+        self.proj = nn.Linear(input_dim, 1)
+
+    def forward(self, features: Tensor) -> Tensor:
+        """Compute the accessibility matrix from world features.
+
+        Args:
+            features: Per-world features ``(|W|, input_dim)``.
+
+        Returns:
+            Accessibility matrix ``(|W|, |W|)`` in [0, 1].
+        """
+        # (1, |W|, d) for batch-first MHA
+        x = features.unsqueeze(0)
+        attn_out, attn_weights = self.attn(x, x, x)
+        # attn_weights: (1, |W|, |W|) — already in [0, 1] (softmax)
+        A = attn_weights.squeeze(0)
+
+        if self.reflexive:
+            A = A.clone()
+            A.fill_diagonal_(1.0)
+
+        if self.top_k is not None:
+            A = top_k_mask(A, self.top_k)
+
+        return A
+
+    def extra_repr(self) -> str:
+        return (
+            f"input_dim={self.input_dim}, "
+            f"num_heads={self.num_heads}, "
             f"reflexive={self.reflexive}, "
             f"top_k={self.top_k}"
         )

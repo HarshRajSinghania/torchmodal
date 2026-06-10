@@ -35,11 +35,11 @@ class Necessity(nn.Module):
     worlds:
 
     .. math::
-        L_{\Box\phi,w} = \text{softmin}_\tau \bigl\{
+        L_{\Box\phi,w} = \operatorname{smooth\_min}_\tau \bigl\{
             (1 - \tilde{A}_{w,w'}) + L_{\phi,w'} \bigr\}_{w' \in W}
 
     .. math::
-        U_{\Box\phi,w} = \text{conv\_pool}_\tau \bigl\{
+        U_{\Box\phi,w} = \operatorname{conv\_pool}_\tau \bigl\{
             (1 - \tilde{A}_{w,w'}) + U_{\phi,w'} \bigr\}_{w' \in W}
 
     Args:
@@ -97,11 +97,11 @@ class Possibility(nn.Module):
     worlds:
 
     .. math::
-        L_{\Diamond\phi,w} = \text{conv\_pool}_\tau \bigl\{
+        L_{\Diamond\phi,w} = \operatorname{conv\_pool}_\tau \bigl\{
             \tilde{A}_{w,w'} + L_{\phi,w'} - 1 \bigr\}_{w' \in W}
 
     .. math::
-        U_{\Diamond\phi,w} = \text{softmax}_\tau \bigl\{
+        U_{\Diamond\phi,w} = \operatorname{smooth\_max}_\tau \bigl\{
             \tilde{A}_{w,w'} + U_{\phi,w'} - 1 \bigr\}_{w' \in W}
 
     Satisfies modal duality: ``♢ϕ ≡ ¬□¬ϕ``.
