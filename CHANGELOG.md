@@ -6,6 +6,56 @@ and the project adheres to [Semantic Versioning](https://semver.org/).
 
 ## [Unreleased]
 
+## [0.2.0] — 2026-08-09
+
+This release completes the downward half of `inference.upward_downward`. Before
+it, the downward pass covered three of the eight node types and silently skipped
+disjunction and every modal operator, so the paper's stated inverse-update rules
+did not all correspond to shipped code.
+
+### Added
+
+- **Downward inverse for `DISJUNCTION`** — previously the downward pass had no
+  `DISJUNCTION` branch at all, so an asserted disjunction propagated nothing to
+  its disjuncts. Adds the Łukasiewicz inverses for `parent = min(1, a + b)`:
+  `L_a ← max(L_a, L_parent − U_b)` (clamped at 0) and `U_a ← min(U_a, U_parent)`,
+  applied symmetrically. Asserting `a ∨ b` true with `b` known false now pins
+  `a` true.
+- **Downward inverses for `NECESSITY` and `POSSIBILITY`** — the downward pass
+  previously skipped all modal nodes, on the grounds that inverting an
+  aggregation over `Ã` has no canonical per-world factorisation. That is true of
+  only one endpoint per operator. A universally quantified lower bound
+  distributes over the neighbourhood and an existential upper bound caps every
+  disjunct, giving two sound, canonical rules:
+
+  ```
+  □ϕ:  L_ϕ[w'] ← max( L_ϕ[w'],  max_w ( L_parent[w] − 1 + A[w,w'] ) )
+  ♢ϕ:  U_ϕ[w'] ← min( U_ϕ[w'],  min_w ( U_parent[w] + 1 − A[w,w'] ) )
+  ```
+
+  The opposite directions (`□` upper, `♢` lower) constrain an aggregate without
+  identifying which neighbour realises it, and remain un-inverted. Both rules are
+  sound at any temperature, because `smooth_min` under-estimates `min` and
+  `smooth_max` over-estimates `max`, and both are inert on masked pairs
+  (`A = 0` contributes `L_parent − 1 ≤ 0` and `U_parent + 1 ≥ 1`), so they are
+  safe under top-`k` sparsification.
+- **Non-convergence `RuntimeWarning`** — `upward_downward` now warns when
+  `max_iterations` is exhausted before `convergence_threshold` is met. The
+  returned bounds are still sound (every update is a pure tightening), but they
+  are not the fixed point, and this previously failed silently.
+
+### Changed
+
+- **Documented why the two passes are iterated rather than run once.** A single
+  upward sweep is exact for the upward system alone, and a single downward sweep
+  is exact given fixed parent bounds, but the joint fixed point generally needs
+  more than one round: the downward pass tightens a leaf the upward pass has
+  already consumed, leaving any sibling formula that shares that leaf stale.
+  Since shared subformulae are exactly what the downward pass exists for, the
+  single-sweep reading of the convergence result does not apply to the combined
+  system. `inference.py`'s module docstring now states this and enumerates which
+  endpoints each node type inverts.
+
 ### Fixed
 
 - **Downward conjunction inverse in `inference.upward_downward`** — the previous
@@ -15,6 +65,19 @@ and the project adheres to [Semantic Versioning](https://semver.org/).
   `U_a ← min(U_a, U_parent + 1 − L_b)` (clamped to 1), and added the sound
   lower-bound update `L_child ← max(L_child, L_parent)`, so asserting a conjunction
   true now propagates truth to both conjuncts. Regression tests added.
+
+### Notes for users
+
+- The new rules only ever *tighten* bounds, so any bracket that was sound before
+  remains sound. Two consequences are worth knowing about: inference on graphs
+  containing disjunctions or modal nodes may now return strictly tighter bounds
+  than 0.1.1 did, and an infeasible assertion over a modal node can now drive an
+  atomic child to `L > U`. The latter is the intended contradiction signal — it
+  is what `functional.contradiction` and `L_contra` consume — but it means leaves
+  are no longer guaranteed to satisfy `L ≤ U` after a downward pass.
+- Verified by a randomised soundness check over 300 models (every leaf pinned to
+  a point value, every compound node left at `[0, 1]`): no downward rule excluded
+  a true leaf value.
 
 ## [0.1.1] — 2026-06-09
 

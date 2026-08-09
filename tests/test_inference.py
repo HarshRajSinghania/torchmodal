@@ -1,5 +1,6 @@
 """Tests for torchmodal.inference."""
 
+import pytest
 import torch
 
 from torchmodal import FormulaGraph, upward_downward
@@ -118,8 +119,13 @@ class TestUpwardDownward:
         assert abs(result["not_p"][0, 1].item() - 0.7) < 0.1
 
 
+@pytest.mark.filterwarnings("ignore::RuntimeWarning")
 class TestInferenceGradientFlow:
-    """Verify gradients flow through the inference loop."""
+    """Verify gradients flow through the inference loop.
+
+    These deliberately run ``max_iterations=1`` to keep the graph small, so
+    the non-convergence warning is expected and filtered.
+    """
 
     def test_grad_through_upward_pass(self):
         graph = FormulaGraph()
@@ -240,3 +246,165 @@ class TestConjunctionDownwardInverse:
 
         assert abs(result["a"][0, 0].item() - 1.0) < 1e-6
         assert abs(result["b"][0, 0].item() - 1.0) < 1e-6
+
+
+class TestDisjunctionDownwardInverse:
+    def test_asserted_disjunction_with_false_sibling_forces_truth(self):
+        """a ∨ b asserted true with b known false must force L_a → 1.
+
+        Łukasiewicz: min(1, a + b) >= L_parent implies a >= L_parent - U_b,
+        so with L_parent = 1 and U_b = 0 the disjunct a is pinned true.
+        Before 0.2.0 the downward pass had no DISJUNCTION branch and left
+        a at [0, 1].
+        """
+        graph = FormulaGraph()
+        graph.add_atomic("a")
+        graph.add_atomic("b")
+        graph.add_disjunction("a_or_b", "a", "b")
+
+        bounds = {
+            "a": torch.tensor([[0.0, 1.0]]),
+            "b": torch.tensor([[0.0, 0.0]]),
+            "a_or_b": torch.tensor([[1.0, 1.0]]),
+        }
+
+        result = upward_downward(graph, bounds, torch.eye(1))
+
+        assert abs(result["a"][0, 0].item() - 1.0) < 1e-6
+
+    def test_disjunction_does_not_exclude_true_value(self):
+        """The inverse must never cut away a disjunct's actual value."""
+        graph = FormulaGraph()
+        graph.add_atomic("a")
+        graph.add_atomic("b")
+        graph.add_disjunction("a_or_b", "a", "b")
+
+        bounds = {
+            "a": torch.tensor([[0.3, 0.3]]),
+            "b": torch.tensor([[0.4, 0.4]]),
+            "a_or_b": torch.tensor([[0.0, 1.0]]),
+        }
+
+        result = upward_downward(graph, bounds, torch.eye(1))
+
+        assert abs(result["a"][0, 0].item() - 0.3) < 1e-6
+        assert abs(result["a"][0, 1].item() - 0.3) < 1e-6
+        assert abs(result["b"][0, 0].item() - 0.4) < 1e-6
+        assert abs(result["b"][0, 1].item() - 0.4) < 1e-6
+
+
+class TestModalDownwardInverse:
+    def test_asserted_box_propagates_lower_bound_to_neighbours(self):
+        """□ϕ asserted true at w must push L_ϕ up at every world w
+        accesses. With A[0, 1] = 1 the constraint is ϕ[1] >= 1.
+        """
+        graph = FormulaGraph()
+        graph.add_atomic("p")
+        graph.add_necessity("box_p", "p")
+
+        A = torch.tensor([[0.0, 1.0], [0.0, 0.0]])
+        bounds = {
+            "p": torch.tensor([[0.0, 1.0], [0.0, 1.0]]),
+            "box_p": torch.tensor([[1.0, 1.0], [0.0, 1.0]]),
+        }
+
+        result = upward_downward(graph, bounds, A, tau=0.05)
+
+        assert result["p"][1, 0].item() > 0.99
+
+    def test_box_inverse_scales_with_accessibility(self):
+        """A half-accessible neighbour yields a proportionally weaker
+        constraint: ϕ[w'] >= L_parent - 1 + A[w, w'] = 0.5."""
+        graph = FormulaGraph()
+        graph.add_atomic("p")
+        graph.add_necessity("box_p", "p")
+
+        A = torch.tensor([[0.0, 0.5], [0.0, 0.0]])
+        bounds = {
+            "p": torch.tensor([[0.0, 1.0], [0.0, 1.0]]),
+            "box_p": torch.tensor([[1.0, 1.0], [0.0, 1.0]]),
+        }
+
+        result = upward_downward(graph, bounds, A, tau=0.05)
+
+        assert abs(result["p"][1, 0].item() - 0.5) < 1e-5
+
+    def test_masked_pairs_are_inert(self):
+        """A = 0 must produce no tightening, so top-k masking is safe."""
+        graph = FormulaGraph()
+        graph.add_atomic("p")
+        graph.add_necessity("box_p", "p")
+
+        A = torch.zeros(2, 2)
+        bounds = {
+            "p": torch.tensor([[0.0, 1.0], [0.0, 1.0]]),
+            "box_p": torch.tensor([[1.0, 1.0], [1.0, 1.0]]),
+        }
+
+        result = upward_downward(graph, bounds, A, tau=0.05)
+
+        assert result["p"][0, 0].item() == 0.0
+        assert result["p"][1, 0].item() == 0.0
+
+    def test_asserted_diamond_false_caps_neighbours(self):
+        """♢ϕ asserted false at w caps ϕ at every world w accesses:
+        ϕ[w'] <= U_parent + 1 - A[w, w'] = 0 for a fully accessible pair.
+        """
+        graph = FormulaGraph()
+        graph.add_atomic("p")
+        graph.add_possibility("dia_p", "p")
+
+        A = torch.tensor([[0.0, 1.0], [0.0, 0.0]])
+        bounds = {
+            "p": torch.tensor([[0.0, 1.0], [0.0, 1.0]]),
+            "dia_p": torch.tensor([[0.0, 0.0], [0.0, 1.0]]),
+        }
+
+        result = upward_downward(graph, bounds, A, tau=0.05)
+
+        assert result["p"][1, 1].item() < 0.01
+
+    def test_modal_inverses_are_sound_against_a_consistent_model(self):
+        """On a model where the bounds already hold, the downward modal
+        rules must not move any leaf outside its true value."""
+        torch.manual_seed(0)
+        graph = FormulaGraph()
+        graph.add_atomic("p")
+        graph.add_necessity("box_p", "p")
+        graph.add_possibility("dia_p", "p")
+
+        A = torch.rand(5, 5)
+        truth = torch.rand(5)
+        bounds = {
+            "p": torch.stack([truth, truth], dim=-1),
+            "box_p": torch.zeros(5, 2) + torch.tensor([0.0, 1.0]),
+            "dia_p": torch.zeros(5, 2) + torch.tensor([0.0, 1.0]),
+        }
+
+        result = upward_downward(graph, bounds, A, tau=0.01)
+
+        assert torch.all(result["p"][:, 0] <= truth + 1e-5)
+        assert torch.all(result["p"][:, 1] >= truth - 1e-5)
+
+
+class TestNonConvergenceWarning:
+    def test_warns_when_iterations_exhausted(self):
+        import warnings as _w
+
+        graph = FormulaGraph()
+        graph.add_atomic("p")
+        graph.add_necessity("box_p", "p")
+
+        A = torch.rand(4, 4)
+        bounds = {
+            "p": torch.zeros(4, 2) + torch.tensor([0.0, 1.0]),
+            "box_p": torch.zeros(4, 2) + torch.tensor([0.9, 1.0]),
+        }
+
+        with _w.catch_warnings(record=True) as caught:
+            _w.simplefilter("always")
+            upward_downward(
+                graph, bounds, A, max_iterations=1,
+                convergence_threshold=1e-12,
+            )
+        assert any(issubclass(c.category, RuntimeWarning) for c in caught)

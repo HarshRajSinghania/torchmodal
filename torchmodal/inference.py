@@ -15,10 +15,30 @@ logical formula graph in two passes:
 Each iteration can only *tighten* bounds (increase L or decrease U),
 creating a monotonic bounded sequence that converges to a unique
 fixed point for acyclic formula graphs.
+
+**Why the two passes are iterated rather than run once.** A single
+upward sweep is exact for the upward system alone, and a single downward
+sweep is exact for the downward system given fixed parent bounds, but the
+*joint* fixed point generally needs more than one round: the downward pass
+tightens a leaf that the upward pass has already consumed, so any sibling
+formula sharing that leaf is stale until the next sweep. Since sharing
+subformulae across asserted axioms is precisely what the downward pass is
+for, :func:`upward_downward` iterates to ``convergence_threshold`` and warns
+if ``max_iterations`` is exhausted first.
+
+**Downward coverage.** ``NEGATION``, ``CONJUNCTION``, ``DISJUNCTION`` and
+``IMPLICATION`` invert on both endpoints. ``NECESSITY`` and ``POSSIBILITY``
+invert on one endpoint each — a universally quantified lower bound
+distributes over the neighbourhood (□) and an existential upper bound caps
+every disjunct (♢), while the opposite directions constrain an aggregate
+without saying which neighbour realises it and so have no canonical
+per-world form. ``UNTIL`` has no downward rule at all: its backward DP
+couples every time step.
 """
 
 from __future__ import annotations
 
+import warnings
 from enum import Enum
 from typing import Dict, List, Optional
 
@@ -371,6 +391,29 @@ def upward_downward(
                     change = (bounds[child_name] - old_child).abs().max().item()
                     max_change = max(max_change, change)
 
+            elif node.ftype == FormulaType.DISJUNCTION:
+                # a ∨ b = parent, with parent = min(1, a + b).
+                # Sound Łukasiewicz inverses (and symmetrically for b):
+                #   parent >= a always (b >= 0, a <= 1)  → U_a ← min(U_a, U_parent)
+                #   a + b >= L_parent                    → L_a ← max(L_a, L_parent - U_b)
+                # The lower rule holds whether or not the clamp is active:
+                # min(1, a + b) >= L_parent implies a + b >= L_parent for every
+                # L_parent <= 1.
+                a_name, b_name = node.children
+                for child_name, sibling_name in [
+                    (a_name, b_name), (b_name, a_name)
+                ]:
+                    old_child = bounds[child_name].clone()
+                    sibling_U = bounds[sibling_name][..., 1]
+                    new_L = torch.max(
+                        old_child[..., 0],
+                        torch.clamp(parent_b[..., 0] - sibling_U, min=0.0),
+                    )
+                    new_U = torch.min(old_child[..., 1], parent_b[..., 1])
+                    bounds[child_name] = torch.stack([new_L, new_U], dim=-1)
+                    change = (bounds[child_name] - old_child).abs().max().item()
+                    max_change = max(max_change, change)
+
             elif node.ftype == FormulaType.IMPLICATION:
                 # a → b = parent: if parent is high, b must be high
                 a_name, b_name = node.children
@@ -387,7 +430,65 @@ def upward_downward(
                 change = (bounds[b_name] - old_b).abs().max().item()
                 max_change = max(max_change, change)
 
+            elif node.ftype == FormulaType.NECESSITY:
+                # □ϕ = parent. Only the LOWER bound factorises per world:
+                #   L_parent[w] <= min_{w'} [(1 - A[w,w']) + ϕ[w']]
+                #               <= (1 - A[w,w']) + ϕ[w']        for every w'
+                #   =>  ϕ[w'] >= L_parent[w] - 1 + A[w,w']      for every w
+                # A universally quantified lower bound distributes over the
+                # neighbourhood, so the constraint is canonical. Inaccessible
+                # pairs (A = 0) contribute L_parent - 1 <= 0 and so are inert,
+                # which is what makes the rule safe under top-k masking.
+                # The upper direction does NOT factorise: U_parent[w] bounds a
+                # *minimum*, i.e. it says some neighbour is small without saying
+                # which, and many valuation profiles realise the same minimum.
+                child_name = node.children[0]
+                old_child = bounds[child_name].clone()
+                cand = parent_b[..., 0].unsqueeze(1) - 1.0 + accessibility
+                new_L = torch.max(
+                    old_child[..., 0],
+                    torch.clamp(cand.max(dim=0).values, min=0.0, max=1.0),
+                )
+                bounds[child_name] = torch.stack([
+                    new_L, old_child[..., 1]
+                ], dim=-1)
+                change = (bounds[child_name] - old_child).abs().max().item()
+                max_change = max(max_change, change)
+
+            elif node.ftype == FormulaType.POSSIBILITY:
+                # ♢ϕ = parent. Dual of the above: only the UPPER bound
+                # factorises, because an existential upper bound caps every
+                # disjunct.
+                #   U_parent[w] >= max_{w'} [A[w,w'] + ϕ[w'] - 1]
+                #               >= A[w,w'] + ϕ[w'] - 1          for every w'
+                #   =>  ϕ[w'] <= U_parent[w] + 1 - A[w,w']      for every w
+                child_name = node.children[0]
+                old_child = bounds[child_name].clone()
+                cand = parent_b[..., 1].unsqueeze(1) + 1.0 - accessibility
+                new_U = torch.min(
+                    old_child[..., 1],
+                    torch.clamp(cand.min(dim=0).values, min=0.0, max=1.0),
+                )
+                bounds[child_name] = torch.stack([
+                    old_child[..., 0], new_U
+                ], dim=-1)
+                change = (bounds[child_name] - old_child).abs().max().item()
+                max_change = max(max_change, change)
+
+            # UNTIL has no downward rule: its backward DP couples every time
+            # step, so neither endpoint factorises into a per-step constraint.
+
         if max_change < convergence_threshold:
             break
+    else:
+        if max_change >= convergence_threshold:
+            warnings.warn(
+                f"upward_downward did not converge in {max_iterations} "
+                f"iterations (last max bound change {max_change:.2e} >= "
+                f"threshold {convergence_threshold:.2e}); returned bounds are "
+                f"sound but may not be the fixed point. Raise max_iterations.",
+                RuntimeWarning,
+                stacklevel=2,
+            )
 
     return bounds

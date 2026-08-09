@@ -27,7 +27,10 @@ The library provides:
   approaches.
 
 - **Inference**: Upward-downward bound propagation algorithm with
-  cycle detection.
+  cycle detection. The downward pass inverts every propositional
+  connective on both endpoints and each modal operator on the one
+  endpoint that factorises per world (□ lower, ♢ upper); it iterates
+  to a fixed point and warns if the iteration budget runs out.
 
 Quick Start::
 
@@ -54,7 +57,7 @@ Quick Start::
 Reference: Sulc (2026), "Modal Logical Neural Networks", NeuS.
 """
 
-__version__ = "0.1.1"
+__version__ = "0.2.0"
 
 # Core functional API
 from torchmodal import functional, nn

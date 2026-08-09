@@ -241,6 +241,26 @@ A = torch.eye(3)  # reflexive accessibility
 tightened = upward_downward(graph, bounds, A, tau=0.1)
 ```
 
+The upward pass evaluates every node type. The downward pass inverts each
+connective on both endpoints and each modal operator on the one endpoint that
+factorises per world:
+
+| node | downward rule |
+|---|---|
+| `¬a` | both endpoints (exact — negation is an involution) |
+| `a ∧ b` | both: `L_a ← L_φ`, `U_a ← U_φ + 1 − L_b` |
+| `a ∨ b` | both: `L_a ← L_φ − U_b`, `U_a ← U_φ` |
+| `a → b` | `L_b ← L_φ + L_a − 1` (modus ponens; no modus tollens) |
+| `□ϕ` | lower only: `L_ϕ[w'] ← max_w (L_φ[w] − 1 + A[w,w'])` |
+| `♢ϕ` | upper only: `U_ϕ[w'] ← min_w (U_φ[w] + 1 − A[w,w'])` |
+| `ϕ U ψ` | none — the backward DP couples every time step |
+
+`□` upper and `♢` lower are not inverted: they bound an aggregate without saying
+which neighbour realises it, so no canonical per-world constraint exists. The
+two passes are **iterated** to `convergence_threshold`, not run once — a
+downward update can stale a sibling formula that shares a leaf — and a
+`RuntimeWarning` is raised if `max_iterations` is exhausted first.
+
 ## Two Learning Modes
 
 | Mode | Fixed | Learned | Use Case |
