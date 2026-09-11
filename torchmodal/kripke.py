@@ -184,6 +184,10 @@ class KripkeModel(nn.Module):
             or :class:`MetricAccessibility`.
         tau: Temperature for modal operators. Default 0.1.
         world_names: Optional list of human-readable world names.
+        top_k: Top-k aggregation for the model's □ / ♢ operators (see
+            :class:`torchmodal.nn.Necessity`): each endpoint aggregates
+            only its ``top_k`` extreme terms. This replaces the deprecated
+            ``top_k`` of the accessibility modules. Default ``None``.
 
     Example::
 
@@ -205,13 +209,15 @@ class KripkeModel(nn.Module):
         ],
         tau: float = 0.1,
         world_names: Optional[List[str]] = None,
+        top_k: Optional[int] = None,
     ) -> None:
         super().__init__()
         self._num_worlds = num_worlds
         self.accessibility = accessibility
         self.tau = tau
-        self.box = Necessity(tau=tau)
-        self.diamond = Possibility(tau=tau)
+        self.top_k = top_k
+        self.box = Necessity(tau=tau, top_k=top_k)
+        self.diamond = Possibility(tau=tau, top_k=top_k)
         self.propositions = nn.ModuleDict()
 
         if world_names is not None:
@@ -360,5 +366,6 @@ class KripkeModel(nn.Module):
         return (
             f"num_worlds={self._num_worlds}, "
             f"tau={self.tau}, "
+            f"top_k={self.top_k}, "
             f"num_propositions={self.num_propositions}"
         )

@@ -51,6 +51,8 @@ class EpistemicOperator(nn.Module):
 
     Args:
         tau: Temperature. Default 0.1.
+        top_k: Top-k aggregation for the underlying □ (see
+            :class:`torchmodal.nn.Necessity`). Default ``None``.
 
     Example::
 
@@ -59,9 +61,9 @@ class EpistemicOperator(nn.Module):
         >>> knowledge = K(prop_bounds, agent_accessibility)
     """
 
-    def __init__(self, tau: float = 0.1) -> None:
+    def __init__(self, tau: float = 0.1, top_k: Optional[int] = None) -> None:
         super().__init__()
-        self.box = Necessity(tau=tau)
+        self.box = Necessity(tau=tau, top_k=top_k)
 
     def forward(
         self,
@@ -101,11 +103,13 @@ class DoxasticOperator(nn.Module):
 
     Args:
         tau: Temperature. Default 0.1.
+        top_k: Top-k aggregation for the underlying □ (see
+            :class:`torchmodal.nn.Necessity`). Default ``None``.
     """
 
-    def __init__(self, tau: float = 0.1) -> None:
+    def __init__(self, tau: float = 0.1, top_k: Optional[int] = None) -> None:
         super().__init__()
-        self.box = Necessity(tau=tau)
+        self.box = Necessity(tau=tau, top_k=top_k)
 
     def forward(
         self,
@@ -144,6 +148,10 @@ class TemporalOperator(nn.Module):
     Args:
         num_steps: Number of discrete time steps.
         tau: Temperature. Default 0.1.
+        top_k: Top-k aggregation for G / F (see
+            :class:`torchmodal.nn.Necessity`). Until does not aggregate
+            over the accessibility relation and is unaffected. Default
+            ``None``.
 
     Example::
 
@@ -154,11 +162,13 @@ class TemporalOperator(nn.Module):
         >>> until_result = temporal.until(phi_bounds, psi_bounds, A_temporal)
     """
 
-    def __init__(self, num_steps: int, tau: float = 0.1) -> None:
+    def __init__(
+        self, num_steps: int, tau: float = 0.1, top_k: Optional[int] = None
+    ) -> None:
         super().__init__()
         self.num_steps = num_steps
-        self.box = Necessity(tau=tau)
-        self.diamond = Possibility(tau=tau)
+        self.box = Necessity(tau=tau, top_k=top_k)
+        self.diamond = Possibility(tau=tau, top_k=top_k)
 
     def build_forward_accessibility(
         self,
@@ -252,6 +262,10 @@ class MultiAgentKripke(nn.Module):
             learnable. Default ``True``.
         init_bias: Initial bias for learnable epistemic logits.
             Default -2.0 ("prior of distrust").
+        top_k: Top-k aggregation for every □ / ♢ in this structure (K, G,
+            F and the composites), see :class:`torchmodal.nn.Necessity`.
+            This replaces the deprecated ``top_k`` of the accessibility
+            modules. Default ``None``.
     """
 
     def __init__(
@@ -261,15 +275,17 @@ class MultiAgentKripke(nn.Module):
         tau: float = 0.1,
         learnable_epistemic: bool = True,
         init_bias: float = -2.0,
+        top_k: Optional[int] = None,
     ) -> None:
         super().__init__()
         self.num_agents = num_agents
         self.num_steps = num_steps
         self.tau = tau
+        self.top_k = top_k
         self.num_states = num_agents * num_steps
 
         # Temporal accessibility (fixed: forward-time flow)
-        self.temporal = TemporalOperator(num_steps, tau=tau)
+        self.temporal = TemporalOperator(num_steps, tau=tau, top_k=top_k)
         A_temporal = self._build_spacetime_temporal()
         self.register_buffer("A_temporal", A_temporal)
 
@@ -286,8 +302,8 @@ class MultiAgentKripke(nn.Module):
             self.epistemic_access = FixedAccessibility(eye)
 
         # Modal operators
-        self.box = Necessity(tau=tau)
-        self.diamond = Possibility(tau=tau)
+        self.box = Necessity(tau=tau, top_k=top_k)
+        self.diamond = Possibility(tau=tau, top_k=top_k)
 
     def _build_spacetime_temporal(self) -> Tensor:
         """Build temporal accessibility over the full spacetime grid.
@@ -449,5 +465,6 @@ class MultiAgentKripke(nn.Module):
             f"num_agents={self.num_agents}, "
             f"num_steps={self.num_steps}, "
             f"num_states={self.num_states}, "
-            f"tau={self.tau}"
+            f"tau={self.tau}, "
+            f"top_k={self.top_k}"
         )

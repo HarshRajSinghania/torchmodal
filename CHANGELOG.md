@@ -6,6 +6,96 @@ and the project adheres to [Semantic Versioning](https://semver.org/).
 
 ## [Unreleased]
 
+### Fixed
+
+- **Top-k masking of the accessibility matrix was unsound and vacuous at scale**
+  (`nn/accessibility.py: top_k_mask`, applied inside `forward()` of
+  `FixedAccessibility`, `LearnableAccessibility`, `MetricAccessibility` and
+  `AttentionAccessibility`). The mask kept the `k` largest entries of each row of
+  `A` and set the rest to 0; `functional.necessity` / `possibility` then
+  aggregated the **full** row. Two defects:
+
+  1. **Selection by the wrong quantity.** `L_□ϕ(w) = smooth_min_τ over w′ of
+     (1 − A[w,w′]) + L_ϕ[w′]` depends on `L`, but neighbours were chosen by `A`
+     alone, so a world just below the k-th access value whose `L` carries the
+     violation was dropped and necessity was over-reported. With
+     `A[w,·] = [0.90 0.88 0.86 0.84 0.83]`, `L = [0.9 0.9 0.9 0.9 0.0]`, `τ = 0.1`
+     the terms are `[1.00 1.02 1.04 1.06 0.17]` (true min 0.170); the released
+     top-4 gave `L_□ = 0.860, U_□ = 1.000` — Theorem 1 (`L ≤ min`) violated by
+     0.69. The dual holds for ♢ (`A + U − 1`, max). This hides contradictions
+     and lets a violated axiom train to zero loss.
+  2. **Zeroing is not excluding.** A zeroed entry still entered the
+     log-sum-exp with term `1 + L` (weight `exp(−(1+L)/τ) ≈ 4.5e−5` per world
+     at `τ = 0.1`), and summed over `|W| − k` worlds that mass dominates once
+     `|W|` is in the thousands. With `k = 8`, the same 8 real neighbours held
+     fixed and ϕ false elsewhere, `[L_□, U_□]` drifted from `[0.403, 0.718]` at
+     `|W| = 16` to `[0.027, 0.997]` at `|W| = 16384` (the neighbourhood alone
+     gives `[0.405, 0.702]`). The effective fan-in was `|W|`, not `k`, so the
+     advertised `τ·log k` gap and the "n ≤ k" / "O(k·|W|)" claims were not
+     what the code computed; at 20k worlds every bound was vacuous and the
+     gradient through the kept neighbours vanished. ♢ degrades the same way
+     when `U = 1` at dropped worlds.
+
+  **Fix.** Top-k now lives on the operators and selects by the *aggregation
+  argument, per endpoint*: `functional.necessity(..., top_k=k)` keeps the `k`
+  smallest of `(1 − A) + L` for `L_□` and of `(1 − A) + U` for `U_□`;
+  `functional.possibility(..., top_k=k)` keeps the `k` largest of `A + L − 1`
+  for `L_♢` and of `A + U − 1` for `U_♢` (`torch.topk(...).values`), and
+  aggregates only those. The true extremum is always in the kept set, so the
+  masked min/max is exact, `smooth_min` / `smooth_max` are within `τ·log k`,
+  nothing depends on `|W|`, and gradients reach exactly the `k` selected
+  entries of `A` per endpoint. On the cases above the fixed operator returns
+  `L_□ = 0.170, U_□ = 0.171` and `[0.405, 0.702]` at every `|W|`. `top_k=None`
+  (the default) is bit-for-bit the previous unmasked computation.
+  Regression tests: `tests/test_masking.py`.
+
+### Changed
+
+- **`top_k` moved from the accessibility modules to the operators.**
+  `nn.Necessity(tau, top_k=)`, `nn.Possibility(tau, top_k=)`,
+  `functional.necessity` / `possibility(top_k=)`, and — threaded through —
+  `KripkeModel(top_k=)`, `inference.upward_downward(top_k=)`,
+  `EpistemicOperator`, `DoxasticOperator`, `TemporalOperator` and
+  `MultiAgentKripke(top_k=)`. `functional.until` does not aggregate over the
+  relation and has no `top_k`.
+- **`top_k=` on `FixedAccessibility`, `LearnableAccessibility`,
+  `MetricAccessibility` and `AttentionAccessibility` is deprecated.** It emits a
+  `DeprecationWarning` explaining the above and is **ignored** — the relation is
+  no longer zeroed (doing so silently would keep producing the unsound bounds).
+  Move the argument to the operator (`nn.Necessity(top_k=k)`).
+- **`sparsify=k` added to the four accessibility modules** for the case where
+  a *sparsified relation* is wanted as a modelling choice: each world keeps
+  only its `k` most accessible worlds and every other world becomes
+  inaccessible (`A = 0`). This defines a different Kripke frame — it is not an
+  aggregation optimisation and does not reduce the operators' cost. The
+  operators then reason soundly about the sparsified frame.
+  `nn.top_k_mask` remains exported as the underlying utility, with its docstring
+  corrected (it previously claimed to reduce cost from `O(|W|²)` to `O(k·|W|)`).
+- The downward □ / ♢ rules in `upward_downward` are unchanged and still run
+  over the full `A`; they are sound for any sound parent bound, which the
+  top-k upward bounds are. The comment claiming the rule was "safe under top-k
+  masking" because masked pairs are inert now states this directly.
+- `examples/scalability_ring.py`: its "Top-k Mask" sweep never went through the
+  operators — the masked `A` itself is scored against the ring ground truth —
+  so it is a relation sparsification and now says so
+  (`LearnableAccessibility(sparsify=k)`); output is unchanged.
+
+### Experiments to re-run
+
+Every reported number produced with `top_k` set on an accessibility module
+was computed with the defective masking and should be regenerated with the
+operator-level `top_k`:
+
+- the ring scaling runs (Table S3) at `k = 8`, 10k / 20k worlds — accuracy is
+  `argmax(A)` and may survive, the reported bounds will change;
+- any run with the C-MAPSS `τ = 0.03` setting;
+- Appendix B.3's "n ≤ k throughout" / worst-case-gap-at-`n = k = 8` statements
+  and the A.1 paragraph on τ shrinking with the fan-in should be re-read
+  against the corrected operators.
+
+`examples/MLNN_AccesbilityScalabilityAblation.ipynb` is self-contained and does
+not use top-k masking; it is unaffected.
+
 ## [0.2.0] — 2026-08-09
 
 This release completes the downward half of `inference.upward_downward`. Before

@@ -259,6 +259,7 @@ def upward_downward(
     tau: float = 0.1,
     max_iterations: int = 10,
     convergence_threshold: float = 1e-6,
+    top_k: Optional[int] = None,
 ) -> Dict[str, Tensor]:
     """Run upward-downward inference on a formula graph.
 
@@ -275,6 +276,12 @@ def upward_downward(
         tau: Temperature for modal operators. Default 0.1.
         max_iterations: Maximum inference iterations. Default 10.
         convergence_threshold: Stop if max bound change < threshold.
+        top_k: Passed to :func:`torchmodal.functional.necessity` /
+            :func:`~torchmodal.functional.possibility` in the upward pass:
+            each modal endpoint aggregates only its ``top_k`` extreme
+            terms. The downward modal rules are unaffected — they are
+            sound for any sound parent bound, which the top-k upward
+            bounds are. Default ``None`` (full aggregation).
 
     Returns:
         Dict mapping formula names to tightened bounds ``(|W|, 2)``.
@@ -324,11 +331,15 @@ def upward_downward(
 
             elif node.ftype == FormulaType.NECESSITY:
                 child_b = bounds[node.children[0]]
-                new_b = F.necessity(child_b, accessibility, tau=tau)
+                new_b = F.necessity(
+                    child_b, accessibility, tau=tau, top_k=top_k
+                )
 
             elif node.ftype == FormulaType.POSSIBILITY:
                 child_b = bounds[node.children[0]]
-                new_b = F.possibility(child_b, accessibility, tau=tau)
+                new_b = F.possibility(
+                    child_b, accessibility, tau=tau, top_k=top_k
+                )
 
             elif node.ftype == FormulaType.UNTIL:
                 hold_b = bounds[node.children[0]]
@@ -437,8 +448,11 @@ def upward_downward(
                 #   =>  ϕ[w'] >= L_parent[w] - 1 + A[w,w']      for every w
                 # A universally quantified lower bound distributes over the
                 # neighbourhood, so the constraint is canonical. Inaccessible
-                # pairs (A = 0) contribute L_parent - 1 <= 0 and so are inert,
-                # which is what makes the rule safe under top-k masking.
+                # pairs (A = 0) contribute L_parent - 1 <= 0 and so are inert.
+                # The rule is sound for any sound L_parent, including the
+                # top-k upward bound (which keeps the true minimum in its
+                # selected terms and so never exceeds the full-row minimum),
+                # so it always runs over the full accessibility matrix.
                 # The upper direction does NOT factorise: U_parent[w] bounds a
                 # *minimum*, i.e. it says some neighbour is small without saying
                 # which, and many valuation profiles realise the same minimum.

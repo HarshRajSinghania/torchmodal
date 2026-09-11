@@ -255,10 +255,44 @@ def implication(a: Tensor, b: Tensor) -> Tensor:
 # ---------------------------------------------------------------------------
 
 
+def _select_terms(x: Tensor, top_k: int | None, largest: bool) -> Tensor:
+    """Keep the ``top_k`` extreme aggregation terms of each row of ``x``.
+
+    Top-k neighbourhoods must be selected on the quantity that is actually
+    aggregated — ``(1 - A) + L`` for □, ``A + U - 1`` for ♢ — and per
+    endpoint, never on ``A`` alone: selecting by ``A`` can drop the world
+    whose ``L`` (or ``U``) carries the extremum, and the bound then over-
+    (or under-) reports it, violating Theorem 1. Selecting on the terms
+    themselves keeps the true extremum in the kept set, so the masked
+    ``min`` / ``max`` is exact and the smooth aggregations stay within
+    ``tau * log(top_k)`` of it. Only the kept terms are aggregated, so the
+    result — and its gradient, which reaches exactly the selected entries
+    of ``A`` — is independent of ``|W|``.
+
+    Args:
+        x: Aggregation terms, shape ``(|W|, |W|)`` (rows = source worlds).
+        top_k: Number of terms to keep per row, or ``None`` for all of them.
+            A ``top_k >= |W|`` also keeps all of them.
+        largest: ``False`` keeps the smallest terms (□), ``True`` the largest
+            (♢).
+
+    Returns:
+        ``x`` itself when nothing is dropped, else ``(|W|, top_k)``.
+    """
+    if top_k is None:
+        return x
+    if top_k < 1:
+        raise ValueError(f"top_k must be a positive integer or None, got {top_k}")
+    if top_k >= x.shape[1]:
+        return x
+    return torch.topk(x, top_k, dim=1, largest=largest).values
+
+
 def necessity(
     prop_bounds: Tensor,
     accessibility: Tensor,
     tau: float = 0.1,
+    top_k: int | None = None,
 ) -> Tensor:
     r"""Necessity (Box / □) operator — differentiable Kripke semantics.
 
@@ -277,6 +311,24 @@ def necessity(
     The operator acts as a "weakest link" detector: if a world is highly
     accessible (Ã ≈ 1) but ϕ is false there, the score collapses.
 
+    **Top-k aggregation.** With ``top_k=k`` each endpoint aggregates only
+    the *k smallest* of its own implication terms — ``(1 - Ã) + L`` for
+    the lower bound, ``(1 - Ã) + U`` for the upper — instead of the full
+    row. Because the terms are selected on the aggregated quantity (not on
+    ``Ã`` alone), the true minimum is always among the kept terms:
+    ``L_□ <= min`` and ``U_□ >= min`` still hold (Theorem 1), the smooth
+    lower bound is within ``tau * log(k)`` of the crisp minimum, the result
+    does not depend on ``|W|``, and gradients reach exactly the ``k``
+    selected entries of ``Ã`` per endpoint. The ``|W| x |W|`` term matrix
+    is still formed; the aggregation itself is ``O(k * |W|)``.
+
+    .. warning::
+       Do **not** emulate ``top_k`` by zeroing entries of ``Ã`` before the
+       call (the ``top_k=`` of the accessibility modules up to 0.2.0). Zeroed
+       entries still enter the log-sum-exp with term ``1 + L`` and their
+       summed mass drives the bounds to ``[0, 1]`` as ``|W|`` grows, and
+       choosing neighbours by ``Ã`` alone is unsound.
+
     Args:
         prop_bounds: Truth bounds of shape ``(|W|, 2)`` where columns are
             ``[L, U]``, or ``(|W|,)`` for point-valued truth values (treated
@@ -284,6 +336,9 @@ def necessity(
         accessibility: Accessibility matrix of shape ``(|W|, |W|)``, values
             in [0, 1].
         tau: Temperature. Default 0.1.
+        top_k: If set, aggregate only the ``top_k`` smallest implication
+            terms per world and endpoint. ``None`` (default) aggregates the
+            full row. Must be a positive integer.
 
     Returns:
         Tensor of shape ``(|W|, 2)`` or ``(|W|,)`` with necessity bounds.
@@ -298,6 +353,11 @@ def necessity(
     # (|W|, |W|): implication terms per source-target world pair
     impl_L = (1.0 - accessibility) + L_phi.unsqueeze(0)  # broadcast target
     impl_U = (1.0 - accessibility) + U_phi.unsqueeze(0)
+
+    # Top-k: keep the k smallest terms of each endpoint (the true minimum is
+    # always among them), so the aggregations below see only k terms.
+    impl_L = _select_terms(impl_L, top_k, largest=False)
+    impl_U = _select_terms(impl_U, top_k, largest=False)
 
     # Lower bound: smooth_min over target worlds (dim=1)
     L_box = smooth_min(impl_L, tau=tau, dim=1)
@@ -317,6 +377,7 @@ def possibility(
     prop_bounds: Tensor,
     accessibility: Tensor,
     tau: float = 0.1,
+    top_k: int | None = None,
 ) -> Tensor:
     r"""Possibility (Diamond / ♢) operator — differentiable Kripke semantics.
 
@@ -334,10 +395,23 @@ def possibility(
     The operator acts as an "evidence scout": it activates if it finds any
     world that is both accessible and where ϕ is true.
 
+    **Top-k aggregation.** With ``top_k=k`` each endpoint aggregates only
+    the *k largest* of its own conjunction terms — ``Ã + L - 1`` for the
+    lower bound, ``Ã + U - 1`` for the upper — so the true maximum is
+    always among the kept terms: ``L_♢ <= max`` and ``U_♢ >= max`` still
+    hold, the smooth upper bound is within ``tau * log(k)`` of the crisp
+    maximum, nothing depends on ``|W|``, and gradients reach exactly the
+    ``k`` selected entries of ``Ã`` per endpoint. See :func:`necessity`
+    for why the selection must be made on the aggregated terms rather than
+    on ``Ã`` alone.
+
     Args:
         prop_bounds: Truth bounds of shape ``(|W|, 2)`` or ``(|W|,)``.
         accessibility: Accessibility matrix ``(|W|, |W|)`` in [0, 1].
         tau: Temperature. Default 0.1.
+        top_k: If set, aggregate only the ``top_k`` largest conjunction
+            terms per world and endpoint. ``None`` (default) aggregates the
+            full row. Must be a positive integer.
 
     Returns:
         Tensor of shape ``(|W|, 2)`` or ``(|W|,)`` with possibility bounds.
@@ -352,6 +426,11 @@ def possibility(
     # conjunction terms
     conj_L = accessibility + L_phi.unsqueeze(0) - 1.0
     conj_U = accessibility + U_phi.unsqueeze(0) - 1.0
+
+    # Top-k: keep the k largest terms of each endpoint (the true maximum is
+    # always among them).
+    conj_L = _select_terms(conj_L, top_k, largest=True)
+    conj_U = _select_terms(conj_U, top_k, largest=True)
 
     # Lower bound: conv_pool with the conjunction as both value and logit (z = x)
     L_dia = conv_pool(conj_L, conj_L, tau=tau, dim=1)
@@ -400,7 +479,9 @@ def until(
         psi_bounds: Truth bounds for ψ, shape ``(T, 2)`` or ``(T,)``.
         accessibility: Forward-time accessibility matrix ``(T, T)``.
             Only the temporal ordering matters; the matrix is used to
-            determine the number of time steps.
+            determine the number of time steps. No aggregation over
+            ``accessibility`` takes place, so there is no ``top_k``
+            parameter here (see :func:`necessity` / :func:`possibility`).
         tau: Temperature (unused in the DP formulation, kept for API
             consistency). Default 0.1.
 
