@@ -96,6 +96,16 @@ A Kripke model M = ⟨W, R, V⟩ is realized as differentiable tensors:
 > confusion with the probability-normalizing `torch.softmax`; the old names remain as
 > deprecated aliases.
 
+**Top-k aggregation** is a parameter of the operators — `nn.Necessity(tau, top_k=k)`,
+`nn.Possibility(tau, top_k=k)`, `functional.necessity(..., top_k=k)` — not of the
+accessibility modules. Each endpoint keeps the `k` extreme *aggregation terms*
+(the `k` smallest of `(1 − A) + L` for `L_□`, the `k` largest of `A + U − 1` for `U_♢`, …)
+and aggregates only those, so the true min/max is always kept, the bounds stay sound,
+the smooth endpoints are within `τ·log k` of the crisp value, and nothing depends on
+`|W|`. Masking `A` by its `k` largest entries before aggregation (the
+`top_k=` of the accessibility modules up to 0.2.0) was unsound and is deprecated — see the
+CHANGELOG.
+
 ### Accessibility Relations
 
 ```python
@@ -112,6 +122,11 @@ access = nn.MetricAccessibility(num_worlds=10000, embed_dim=64)
 # Attention-based (rich per-world features, asymmetric relations)
 access = nn.AttentionAccessibility(input_dim=384, num_heads=4)
 A = access(features)  # features: (num_worlds, 384)
+
+# Deliberately sparsified relation (a modelling choice: each world keeps only
+# its k most accessible worlds, the rest become inaccessible). This is NOT an
+# aggregation optimisation — for that use top_k= on the operators.
+access = nn.MetricAccessibility(num_worlds=10000, embed_dim=64, sparsify=8)
 ```
 
 ### Loss Functions

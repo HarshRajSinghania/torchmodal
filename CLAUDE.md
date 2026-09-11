@@ -83,6 +83,18 @@ Modal duality is preserved: `♢ϕ ≡ ¬□¬ϕ` via `smooth_max(x) = 1 - smoot
 
 As `τ → 0`, operators recover crisp classical modal semantics.
 
+**Top-k aggregation lives on the operators** (`necessity(..., top_k=k)`,
+`nn.Necessity(top_k=k)`, and threaded through `KripkeModel`, `upward_downward`,
+`systems.*`). Each endpoint keeps the `k` extreme *aggregation terms* — the `k`
+smallest of `(1 − Ã) + L` / `(1 − Ã) + U` for □, the `k` largest of `Ã + L − 1` /
+`Ã + U − 1` for ♢ — and aggregates only those, so the true extremum is always kept,
+Theorem 1 holds, the gap is `τ·log k`, and nothing depends on `|W|`. Never emulate
+this by zeroing entries of `Ã` (the deprecated `top_k=` on the accessibility
+modules): selecting by `Ã` alone can drop the world carrying the violation, and
+zeroed entries still enter the log-sum-exp and drive the bounds to `[0, 1]` as
+`|W|` grows. `sparsify=k` on the accessibility modules is a different thing — a
+deliberately sparser Kripke frame (modelling choice), not an optimisation.
+
 ### Propositional connectives (Łukasiewicz fuzzy logic)
 
 All Boolean connectives are explicitly defined using Łukasiewicz t-norms:

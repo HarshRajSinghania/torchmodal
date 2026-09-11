@@ -7,7 +7,18 @@ MLNN_AccesbilityScalabilityAblation.ipynb.
 
 Tests learning a ring-structured accessibility relation using
 consistency (□) and expansion (♢) losses. Runs ablations over
-temperature, top-k masking, and learnable vs fixed structure.
+temperature, top-k *sparsification of the relation*, and learnable vs
+fixed structure.
+
+Note on top-k: this script's losses are computed directly from A (no
+torchmodal.functional.necessity / possibility call), and the quantity
+scored against the ring ground truth is the (sparsified) A itself. The
+"Top-k Mask" sweep therefore sparsifies the *relation* — each agent keeps
+its k most accessible neighbours, a modelling choice expressed via
+``LearnableAccessibility(sparsify=k)``. It is not the operator-level
+``top_k`` aggregation (``nn.Necessity(top_k=k)``), which selects the k
+extreme aggregation terms per endpoint and is the sound replacement for
+the former ``LearnableAccessibility(top_k=k)``.
 
 Uses:
   - torchmodal.nn.LearnableAccessibility
@@ -59,9 +70,10 @@ class RingMLNN(torch.nn.Module):
         self.num_agents = num_agents
         self.tau = tau
 
-        # Learnable accessibility
+        # Learnable accessibility; `top_k` here sparsifies the relation
+        # itself (see module docstring), hence `sparsify=`.
         self.access = torchmodal.nn.LearnableAccessibility(
-            num_agents, init_bias=0.0, reflexive=False, top_k=top_k
+            num_agents, init_bias=0.0, reflexive=False, sparsify=top_k
         )
         if not learnable:
             self.access.logits.requires_grad = False
