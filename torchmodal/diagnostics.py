@@ -35,7 +35,8 @@ Example::
         lambda: nested_necessity(A, depth=6), {"A": A}
     )
     print(report["healthy"])   # False
-    print(report["issues"])    # ['output ... pinned at floor', ...]
+    print(report["issues"])    # ["bound 'output' is vacuous: ...", ...]
+    print(report["warnings"])  # ["term 'output.L' is dead: ...", ...]
 """
 
 from __future__ import annotations
@@ -179,18 +180,35 @@ def gradient_health(
     term that is silently stuck, contributing nothing to training while
     raising nothing.
 
-    A term is reported as **dead** (an entry in ``"issues"``) when it is
-    pinned *and* its gradient to every parameter has vanished — it cannot
-    move and nothing can move it. A term that is pinned but still
-    differentiable is reported as **saturated** (an entry in
-    ``"warnings"``): legitimate for a proposition that is simply true,
-    suspicious for a learned one.
-
     Bound tensors of shape ``(..., 2)`` are split into ``"<name>.L"`` and
     ``"<name>.U"`` before checking, because the dead state of a modal
     neuron is ``L = 0`` *with* ``U = 1`` — checked jointly, neither column
-    looks pinned. A split pair whose width is 1 everywhere is additionally
-    reported as ``vacuous``: the bound has collapsed to "no information".
+    looks pinned.
+
+    **What counts as unhealthy.** A term is reported as **dead** when it is
+    pinned *and* its gradient to every parameter has vanished, and as
+    **saturated** when pinned but still differentiable. Both go to
+    ``"warnings"``, not ``"issues"``: on its own, a pinned endpoint does
+    *not* mean anything is wrong. A sound upper bound that has legitimately
+    reached 1 is indistinguishable, at the level of a single term, from a
+    broken one — and whether the clamp at the interval edge passes gradient
+    exactly *at* the boundary is a torch-version convention (2.8 passes
+    1.0, 2.14 passes 0.0), so keying ``healthy`` on it would be both noisy
+    and version-dependent.
+
+    ``healthy`` is therefore ``False`` only on signals that mean the term
+    has genuinely stopped carrying information:
+
+    - a **vacuous** bound — width spanning the whole interval everywhere,
+      so the pair says nothing at all (this is what a collapsed nest of
+      modal operators produces, on every torch version);
+    - **no parameter receiving a usable gradient** from any term;
+    - a term with **no autograd path** at all, or a parameter with
+      ``requires_grad=False``.
+
+    Read ``"warnings"`` as well when diagnosing: a dead endpoint whose
+    bound is not yet vacuous is often the first sign of a nest about to
+    collapse.
 
     .. note::
        The call runs under ``torch.enable_grad`` and leaves ``.grad``
@@ -235,12 +253,13 @@ def gradient_health(
             ``grad_vanished``, ``requires_grad``.
         - ``"vacuous"`` — names of split bound pairs whose width is the
             full interval everywhere.
-        - ``"healthy"`` — ``True`` when no term is dead and at least one
-            parameter received a non-vanishing gradient.
-        - ``"issues"`` — human-readable strings, one per dead term or
+        - ``"healthy"`` — ``True`` when no bound is vacuous, every term
+            has an autograd path, and at least one parameter received a
+            non-vanishing gradient.
+        - ``"issues"`` — human-readable strings, one per vacuous bound or
             unreachable parameter. Empty when healthy.
-        - ``"warnings"`` — pinned-but-differentiable terms and vacuous
-            bounds. Do not affect ``healthy``.
+        - ``"warnings"`` — dead and saturated terms. Informative, but do
+            not affect ``healthy``; see the note above on why.
 
     Example:
         >>> import torch
@@ -341,9 +360,21 @@ def gradient_health(
             "grads": grads_report,
         }
 
+        # A single pinned endpoint is reported but does not by itself make the
+        # report unhealthy. A *correctly saturated* bound looks identical to a
+        # broken one at the term level — an upper bound that has legitimately
+        # reached 1 is pinned with no gradient, because the clamp at the
+        # interval edge stops it (and whether a clamp passes gradient exactly
+        # *at* the boundary is a torch-version convention: 2.8 passes 1.0,
+        # 2.14 passes 0.0). Keying `healthy` on that would make this tool both
+        # noisy and version-dependent.
+        #
+        # The version-stable signal that a modal term has actually collapsed is
+        # **vacuity** — the bound spanning the whole interval, carrying no
+        # information at all — which is checked below, per bound pair.
         where = "floor" if pinned_floor else "ceiling"
         if dead:
-            issues.append(
+            warns.append(
                 f"term '{name}' is dead: pinned at the {where} "
                 f"({floor if pinned_floor else ceiling}) with no gradient "
                 f"to any parameter"
@@ -365,9 +396,10 @@ def gradient_health(
             (w - interval).abs().max().item() <= vacuous_atol
         ):
             vacuous.append(name)
-            warns.append(
-                f"bound '{name}' is vacuous: width is {interval} everywhere "
-                f"(the bound carries no information)"
+            issues.append(
+                f"bound '{name}' is vacuous: width is {interval} everywhere — "
+                f"the bound has collapsed to [{floor}, {ceiling}] and carries "
+                f"no information"
             )
 
     param_report: Dict[str, Dict[str, Any]] = {}

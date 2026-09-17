@@ -128,14 +128,17 @@ class TestGradientHealthDetectsDeadTerms:
             assert not report["healthy"]
             assert report["outputs"]["output.L"]["dead"]
             assert report["outputs"]["output.L"]["pinned_at_floor"]
+            assert any("dead" in w for w in report["warnings"])
 
     def test_splits_bounds_into_endpoints(self):
         """L and U fail in opposite directions and must be checked apart."""
         A = torch.ones(8, 8, requires_grad=True)
         report = gradient_health(_nested_box(A, 6), {"A": A})
         assert set(report["outputs"]) == {"output.L", "output.U"}
-        assert report["outputs"]["output.L"]["dead"]
-        assert not report["outputs"]["output.U"]["dead"]
+        assert report["outputs"]["output.L"]["pinned_at_floor"]
+        assert report["outputs"]["output.U"]["pinned_at_ceiling"]
+        assert not report["outputs"]["output.L"]["pinned_at_ceiling"]
+        assert not report["outputs"]["output.U"]["pinned_at_floor"]
 
     def test_reports_a_vacuous_bound(self):
         A = torch.ones(8, 8, requires_grad=True)
@@ -175,21 +178,43 @@ class TestGradientHealthDetectsDeadTerms:
         assert report["params"]["unused"]["grad_vanished"]
         assert any("unused" in i for i in report["issues"])
 
-    def test_saturated_but_differentiable_is_a_warning_not_an_issue(self):
+    def test_a_pinned_endpoint_alone_does_not_make_it_unhealthy(self):
         """A single box over an all-true proposition pins U at 1.
 
-        Its gradient is alive, so this is reported as saturated rather
-        than dead, and the term does not make the report unhealthy.
+        That is a *correct* upper bound, not a defect. Whether its
+        gradient survives the output clamp at exactly 1.0 is a torch
+        version convention (2.8 passes 1.0, 2.14 passes 0.0), so the
+        endpoint is reported in ``warnings`` and must not affect
+        ``healthy`` — otherwise this tool's verdict would depend on the
+        installed torch.
         """
         A = torch.ones(4, 4, requires_grad=True)
         report = gradient_health(
             lambda: F.necessity(torch.ones(4, 2), A, tau=0.1), {"A": A}
         )
         assert report["outputs"]["output.U"]["pinned_at_ceiling"]
-        assert not report["outputs"]["output.U"]["dead"]
-        assert any("saturated" in w for w in report["warnings"])
+        assert any(
+            "saturated" in w or "dead" in w for w in report["warnings"]
+        )
         assert report["healthy"]
         assert report["issues"] == []
+
+    def test_verdict_is_independent_of_clamp_boundary_gradients(self):
+        """The bound is informative, so the report is healthy either way.
+
+        Pins the regression behind the torch 2.8 -> 2.14 clamp change:
+        `necessity` over a non-degenerate frame yields a bound that is not
+        vacuous, and a non-vacuous bound with live gradient is healthy
+        regardless of what the clamp does at its boundary.
+        """
+        torch.manual_seed(0)
+        A = torch.rand(6, 6, requires_grad=True)
+        bounds = torch.rand(6, 2).sort(dim=1).values
+        report = gradient_health(
+            lambda: F.necessity(bounds, A, tau=0.1), {"A": A}
+        )
+        assert report["vacuous"] == []
+        assert report["healthy"]
 
 
 class TestGradientHealthApi:
@@ -251,10 +276,19 @@ class TestGradientHealthApi:
 
 
 class TestAssertHasSignal:
-    def test_raises_on_a_dead_term(self):
+    def test_raises_on_a_collapsed_term(self):
         A = torch.ones(8, 8, requires_grad=True)
-        with pytest.raises(GradientHealthError, match="dead"):
+        with pytest.raises(GradientHealthError, match="vacuous"):
             assert_has_signal(_nested_box(A, 6), {"A": A})
+
+    def test_raises_on_a_disconnected_relation(self):
+        T = 6
+        phi = torch.stack([torch.full((T,), 0.9), torch.ones(T)], dim=-1)
+        psi = torch.zeros(T, 2)
+        psi[T - 1] = 1.0
+        A = torch.triu(torch.ones(T, T)).requires_grad_(True)
+        with pytest.raises(GradientHealthError, match="autograd path"):
+            assert_has_signal(lambda: F.until(phi, psi, A), {"A": A})
 
     def test_includes_the_message_prefix(self):
         A = torch.ones(8, 8, requires_grad=True)
