@@ -6,6 +6,135 @@ and the project adheres to [Semantic Versioning](https://semver.org/).
 
 ## [Unreleased]
 
+> **No existing public call returns a different value.** Every change below is
+> additive — new functions, new modules, or new parameters whose defaults
+> reproduce today's output exactly. Verified two ways: a 180-entry bit-exact
+> fingerprint of the public API (aggregations, connectives, modal operators,
+> `until`, contradiction, utils, every `nn` module, `KripkeModel`, losses,
+> systems and `upward_downward`) is unchanged apart from the two `__all__` lists
+> gaining the new names; and the ten seeded example scripts produce byte-identical
+> output against the 0.2.1 tree.
+
+### Added
+
+- **`functional.until_graph`** — a relation-aware Until, the least fixpoint of
+  `U = ψ ∨ (φ ∧ ♢U)` over an arbitrary (cyclic, branching, disconnected or
+  learned) relation. Uses **Gödel** connectives, which are idempotent, so the
+  lower bound does not decay per step the way `until`'s Łukasiewicz sweep does,
+  and an **annealed** temperature `τ_j = τ·ρ^j`, so the accumulated slack is a
+  geometric series bounded by `τ·log|W| / (1 − ρ)` rather than growing with the
+  sweep count. `quantifier="diamond"` is EU (default, sound on any frame);
+  `quantifier="box"` is AU and is sound **only on a serial relation** — this is
+  documented with the measurement that shows it failing otherwise.
+
+  On a 6-step chain with `L_φ = 0.9` and ψ true only at the end:
+
+  | | `L` per step | after cutting the 2→3 edge | `∂L[0]/∂A` |
+  |---|---|---|---|
+  | `until` (existing, unchanged) | 0.500 … 1.000 | **0.500 — unchanged** | 0.0 |
+  | `until_graph` (diamond) | 0.900 … 1.000 | **0.000 — broken path detected** | ≈0.50 |
+
+- **`torchmodal.diagnostics`** — a new module, exported at package level as
+  `gradient_health`, `assert_has_signal` and `GradientHealthError`. It detects
+  the characteristic failure of a differentiable logic: a term pinned to 0 or 1
+  whose gradient has vanished, which raises nothing and simply stops
+  contributing. It splits `(..., 2)` bound tensors into their `L` and `U`
+  endpoints — the dead state of a box neuron is `L = 0` *with* `U = 1`, which
+  neither column reveals on its own — and attributes gradients per endpoint.
+  A term is reported *dead* when pinned with no gradient, and merely *saturated*
+  when pinned but still differentiable. Neither alone makes a report unhealthy:
+  a sound upper bound that has legitimately reached 1 looks identical, at the
+  term level, to a broken one, and whether the interval clamp passes gradient
+  exactly *at* the boundary is a torch-version convention (2.8 passes 1.0, 2.14
+  passes 0.0). `healthy` keys instead on signals that are unambiguous and stable
+  across versions — a **vacuous** bound spanning the whole interval, no
+  parameter receiving a usable gradient, or a missing autograd path.
+  `assert_has_signal` is the raising variant for tests.
+
+- **`functional.box_width_entropy`** — the per-world interval width that one
+  necessity level contributes, `τ·H(softmin weights)`. This is an identity, not
+  an estimate: it equals `conv_pool(x, −x) − smooth_min(x)` (verified to 8.9e-16
+  in float64) and, when `L == U` and the output clamp does not engage, equals
+  `U_□ − L_□` exactly (3.9e-16). It is bounded by `τ·log n` with equality iff
+  every aggregated term ties, and it turns three previously hand-waved
+  quantities into computed ones: how loose a given `□` is, the faithful nesting
+  depth `k* = ⌈1/(τ·H̄)⌉`, and the width of the `contradiction` dead zone.
+
+- **`examples/muddy_children.py`** and three runnable Colab notebooks under
+  `examples/notebooks/` (the muddy-children puzzle, a temporal epistemic
+  read-out, and recovery of a hidden constraint graph from valid colourings at
+  edge-recovery AUC 1.000).
+
+- **`tests/test_traps.py`** — 27 regression tests that pin the library's *known
+  limitations*, so a trap cannot silently return: `until`'s invariance to its
+  accessibility and its temperature, `conv_pool`'s non-monotonicity and its exact
+  derivative, the `contradiction` dead zone and its identity with the box width,
+  and the nesting depth at which necessity floors. 73 new tests in total (202
+  from 129).
+
+- Documentation site (`mkdocs.yml`, `docs/`, mkdocs-material + mkdocstrings,
+  builds `--strict`), `CONTRIBUTING.md`, `.gitignore`, and CI workflows
+  (`.github/workflows/ci.yml`, `docs.yml`) — the repository previously had **no
+  CI workflow at all**, although the README badge pointed at one.
+
+### Changed
+
+- **`functional.until` now raises a `DeprecationWarning` if `tau` is passed.**
+  The argument has never had any effect — the backward DP contains no smooth
+  aggregation — and it is scheduled for removal in 0.4.0. Omitting it is silent
+  and unchanged. The signature default is a `float` subclass carrying the
+  historical value `0.1`, so `inspect.signature` and any code reading the value
+  are unaffected; only identity distinguishes "not passed" from an explicit
+  `tau=0.1`. `inference.upward_downward` no longer forwards `tau` to it.
+
+- **Docstrings now state every operator's trap with its measurement**, per the
+  library's convention that a bound-producing function says what it bounds, in
+  which direction, and by how much:
+
+  - `conv_pool` — documents that it is **not monotone** (`∂f/∂x_k =
+    w_k·(1 − (x_k − f)/τ)`, negative once `x_k − f > τ`), and that this
+    invalidates the argument "the box neuron is monotone in `A`, therefore the
+    bound is sound". The correct route is monotonicity of the hard `min` plus the
+    one-sided enclosure. Also states the exact width identity.
+  - `contradiction` — documents the **dead zone**: identically zero with zero
+    gradient until the bound crossing exceeds the box width. The correspondence
+    is exact — measured edges 0.109861 / 0.179176 / 0.230259 for fan-in 3 / 6 / 10
+    at `τ = 0.1`, against `τ·log n` of 0.109861 / 0.179176 / 0.230259 — and it is
+    now stated that `L_contra` must not be the sole guard against a degenerate
+    optimum.
+  - `necessity` / `possibility` — document the **accumulated slack** of `τ·H(w)`
+    per level with a measured depth table. The per-level loss is the frame's
+    branching factor (`τ·log 8`, `τ·log 3`, `τ·log 2` for a complete, bidirectional
+    -ring and ring frame over 8 worlds), and a complete frame floors at depth 5,
+    exactly where `k*` predicts.
+  - `MultiAgentKripke.K_G` / `K_F` — document that they are **two modal levels**
+    and therefore carry twice the slack (measured: `G` alone gives `L = 0.861`,
+    `K_G` gives `L = 0.770`, the two levels contributing 0.1387 each).
+  - `until` — documents that it is **inert with respect to its relation**, reading
+    only `accessibility.shape[0]`, with no autograd path back to it, and that its
+    Łukasiewicz sweep floors the lower bound.
+
+- **Paper metadata corrected across the repository.** The title is *Modal Logic
+  Neural Networks*; the earlier mis-spelling of it (with an adjectival "Logical")
+  no longer appears anywhere in the repository. The
+  authors are Antonin Sulc (Lawrence Berkeley National Laboratory) and Noor
+  Naddour (The University of Queensland); the venue is an **oral presentation at
+  NeSy 2026**, the 20th Conference on Neurosymbolic Learning and Reasoning, PMLR
+  vol. 284 — `torchmodal/__init__.py` previously said "NeuS"; the year is 2026;
+  and the canonical link is <https://openreview.net/pdf?id=uLOdtBm0Cx>, with
+  arXiv:2512.03491 retained as a secondary identifier. `CITATION.cff` gained the
+  second author and an `@inproceedings` `preferred-citation`, and validates
+  against the CFF 1.2.0 schema.
+
+- **Packaging metadata** — `pyproject.toml` gained keywords, full trove
+  classifiers, a `Paper` and `Documentation` URL, and a `docs` extra.
+
+- **README restructured** to lead with what the library is in one sentence, the
+  NeSy 2026 oral, a runnable ten-line epistemic puzzle, a comparison against LNN,
+  LTN, DeepProbLog, Semantic Loss, Scallop, SATNet and STLCG, and a
+  **Limitations** section. The API reference moved below the fold.
+
+
 ## [0.2.1] — 2026-09-11
 
 ### Fixed

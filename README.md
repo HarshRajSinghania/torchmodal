@@ -7,9 +7,103 @@
 
 **Differentiable Modal Logic for PyTorch**
 
-A PyTorch library implementing Modal Logical Neural Networks (MLNNs) — the first framework enabling differentiable reasoning over necessity and possibility by integrating neural networks with Kripke semantics from modal logic.
+torchmodal makes the modal operators **□ (necessity)** and **♢ (possibility)** into trainable
+neural layers over a Kripke structure: every truth value is an interval `[L, U]` that
+**provably brackets** the crisp modal-logic answer, and the accessibility relation between
+worlds can be **learned by gradient descent** instead of being specified.
 
+> 📣 **Oral presentation at [NeSy 2026](https://openreview.net/pdf?id=uLOdtBm0Cx)** — the 20th
+> Conference on Neurosymbolic Learning and Reasoning. *Modal Logic Neural Networks*,
+> Antonin Sulc (Lawrence Berkeley National Laboratory) and Noor Naddour (The University of
+> Queensland). PMLR vol. 284. **[Read the paper →](https://openreview.net/pdf?id=uLOdtBm0Cx)**
 
+## A classic epistemic puzzle, in ten lines
+
+Three children have muddy foreheads. Each sees the others but not themselves. Their father
+says "at least one of you is muddy", then asks repeatedly whether anyone knows. Nobody does —
+until the third round, when all three suddenly do. Nothing new is ever observed; the only
+information is that nobody else could answer.
+
+```python
+import torch
+from itertools import product
+from torchmodal import functional as F
+
+worlds = list(product([0, 1], repeat=3))          # 3 children, muddy or not
+here = worlds.index((1, 1, 1))                    # all three really are muddy
+
+for rnd in range(3):                              # each round rules out more worlds
+    alive = torch.tensor([float(sum(w) > rnd) for w in worlds])
+    # child 0 sees the others but not itself:
+    A = torch.tensor([[float(w[1:] == v[1:]) for v in worlds] for w in worlds])
+    muddy = torch.tensor([[float(w[0])] * 2 for w in worlds])
+    L, U = F.necessity(muddy, A * alive, tau=0.05)[here]
+    print(f"round {rnd + 1}: child 0 knows it is muddy -> [{L:.3f}, {U:.3f}]")
+```
+
+```
+round 1: child 0 knows it is muddy -> [0.000, 0.000]
+round 2: child 0 knows it is muddy -> [0.000, 0.000]
+round 3: child 0 knows it is muddy -> [0.920, 1.000]
+```
+
+The textbook answer — *no, no, yes* — falls out of the modal operator alone, and every
+interval contains it. See [`examples/muddy_children.py`](examples/muddy_children.py) for the
+full version, which checks all three children and asserts soundness at every round.
+
+## What makes this different
+
+| | learnable relation between worlds | sound bounds on the crisp answer | native □ / ♢ |
+|---|:---:|:---:|:---:|
+| **torchmodal (MLNN)** | ✅ learned `A_θ` | ✅ `L ≤ crisp ≤ U`, gap `τ·H(w)` | ✅ |
+| [LNN](https://arxiv.org/abs/2006.13155) (Riegel et al. 2020) | — no world structure | ✅ `[L, U]` bounds | — propositional |
+| [LTN](https://arxiv.org/abs/1606.04422) (Serafini & Garcez 2016) | — | — point-valued | — ∀/∃ over domains |
+| [DeepProbLog](https://arxiv.org/abs/1805.10872) (Manhaeve et al. 2018) | — fixed program | — exact probabilities | — |
+| [Semantic Loss](https://arxiv.org/abs/1711.11157) (Xu et al. 2018) | — | — scalar penalty | — propositional |
+| [Scallop](https://arxiv.org/abs/2304.04812) (Li et al. 2023) | — fixed Datalog | ~ provenance-dependent | — |
+| [SATNet](https://arxiv.org/abs/1905.12149) (Wang et al. 2019) | ✅ learned MAXSAT | — no bounds | — |
+| [STLCG](https://arxiv.org/abs/2008.00097) (Leung et al. 2023) | — fixed time axis | — point-valued | ~ temporal only |
+
+The combination in the first row is what is unusual: other systems either fix the relational
+structure and reason exactly over it, or learn structure without bracketing anything. A
+`SemanticLoss` baseline ships in this package so the comparison can be run rather than
+argued — see [`examples/baseline_comparison.py`](examples/baseline_comparison.py).
+
+## Soundness is a property you can check
+
+Every operator's docstring states **which crisp operator it bounds, in which direction, and
+what the gap is**. The gap is not a hand-wave — it is an exact, computable quantity:
+
+```python
+from torchmodal import functional as F
+
+F.box_width_entropy(A, bounds, tau=0.1)   # τ·H(w): the exact width one □ level adds
+```
+
+This is `conv_pool(x, -x) - smooth_min(x)` identically (verified to 8.9e-16 in float64), it
+is bounded by `τ·log n`, and it tells you three things at once: how loose this `□` is, how
+many levels you can nest before the bound floors (`k* = ⌈1/(τ·H̄)⌉`), and how large a
+contradiction can hide from `L_contra` without producing any gradient.
+
+### Find the silently-dead term in your neurosymbolic loss
+
+The characteristic failure of a differentiable logic is not an exception — it is a term
+pinned to 0 or 1 whose gradient has vanished. It raises nothing; it just stops contributing
+while everything else keeps training.
+
+```python
+from torchmodal.diagnostics import gradient_health
+
+report = gradient_health(lambda: my_modal_term(A), {"A": A})
+report["healthy"]   # False
+report["issues"]    # ["term 'output.L' is dead: pinned at the floor (0.0)
+                    #   with no gradient to any parameter"]
+```
+
+`gradient_health` splits `[L, U]` bounds into their two endpoints — the dead state of a box
+neuron is `L = 0` *with* `U = 1`, which neither column reveals on its own — and attributes
+gradients per endpoint. `assert_has_signal(...)` is the raising variant for tests. No other
+neurosymbolic library ships one.
 
 ## Installation
 
@@ -86,7 +180,8 @@ A Kripke model M = ⟨W, R, V⟩ is realized as differentiable tensors:
 |----------|--------|-----------|----------------|
 | Necessity | □ | True in *all* accessible worlds | `smooth_min` over weighted implications |
 | Possibility | ♢ | True in *some* accessible world | `smooth_max` over weighted conjunctions |
-| Until | U | ϕ holds until ψ becomes true | backward DP sweep `U_t = ψ_t ∨ (ϕ_t ∧ U_{t+1})` |
+| Until | U | ϕ holds until ψ becomes true | backward DP sweep `U_t = ψ_t ∨ (ϕ_t ∧ U_{t+1})` — **total order only**, ignores its relation |
+| Until (graph) | U | ϕ holds until ψ, over *any* relation | least fixpoint of `U = ψ ∨ (φ ∧ ♢U)`, Gödel connectives, annealed τ |
 | Knowledge | K_a | Agent *a* knows ϕ | □ restricted to agent's row |
 | Belief | B_a | Agent *a* believes ϕ | □ with non-reflexive access |
 | Globally | G | ϕ at all future times | □ over temporal accessibility |
@@ -149,14 +244,25 @@ loss = sem.forward_mutual_exclusive(probs)  # "exactly one of k" per row
 
 ## Examples
 
+### Run in Colab — no install
+
+| Notebook | What it shows |
+|---|---|
+| [![Colab](https://colab.research.google.com/assets/colab-badge.svg)](https://colab.research.google.com/github/sulcantonin/torchmodal/blob/main/examples/notebooks/01_muddy_children.ipynb) **Muddy children** | The classic epistemic puzzle recovered exactly, with the bounds shown to bracket the crisp answer and tighten as `τ → 0` |
+| [![Colab](https://colab.research.google.com/assets/colab-badge.svg)](https://colab.research.google.com/github/sulcantonin/torchmodal/blob/main/examples/notebooks/02_temporal_epistemic.ipynb) **Temporal epistemic read-out** | `G`, `F` and `K` over a spacetime frame, the 2× cost of the `K∘G` composite, and `gradient_health` locating the nesting floor |
+| [![Colab](https://colab.research.google.com/assets/colab-badge.svg)](https://colab.research.google.com/github/sulcantonin/torchmodal/blob/main/examples/notebooks/03_graph_coloring.ipynb) **Learning the constraint graph** | The hidden graph recovered from valid colourings alone — **edge-recovery AUC 1.000** |
+
+### Scripts
+
 All examples are self-contained scripts in [`examples/`](examples/) and can be run directly:
 
 ```bash
-python examples/sudoku.py
+python examples/muddy_children.py
 ```
 
 | Example | Modal Logic | Description |
 |---------|-------------|-------------|
+| [`muddy_children.py`](examples/muddy_children.py) | K_a | The classic epistemic puzzle, recovered exactly, with soundness asserted each round |
 | [`sudoku.py`](examples/sudoku.py) | □, CSP | 4x4 Sudoku via modal contradiction + crystallization |
 | [`temporal_epistemic.py`](examples/temporal_epistemic.py) | K, G, F, K∘G | Learns epistemic accessibility to resolve contradictions |
 | [`epistemic_trust.py`](examples/epistemic_trust.py) | K_a | Trust learning from promise-keeping behavior |
@@ -283,28 +389,74 @@ downward update can stale a sibling formula that shares a leaf — and a
 | **Deductive** | Accessibility R | Propositions V | POS guardrails, Sudoku, OOD detection |
 | **Inductive** | Propositions V | Accessibility A_θ | Trust learning, social structure discovery |
 
+## Limitations
+
+These are measured properties of the implementation, not speculation. Each has a regression
+test in [`tests/test_traps.py`](tests/test_traps.py) so it cannot silently change.
+
+- **`conv_pool` is not monotone.** Its derivative `w_k·(1 − (x_k − f)/τ)` goes negative once
+  `x_k − f > τ`, so raising a term that is already far above the pooled value *lowers* the
+  result. Soundness is unaffected, but the tempting argument "the box neuron is monotone in
+  `A`, therefore the bound is sound" is **not available** — the correct route is monotonicity
+  of the hard `min` plus the one-sided enclosure.
+
+- **`contradiction` has a dead zone after a modal neuron.** It is identically zero, with zero
+  gradient, until the bound crossing exceeds the box width `τ·H(w)` — exactly 0.1792 for a
+  fan-in of 6 at `τ = 0.1`. Do not rely on `L_contra` as the *sole* guard against a degenerate
+  optimum; anneal `τ`, or pair it with `gradient_health`.
+
+- **Each modal level costs `τ·H(w)` of interval width.** On a densely connected frame this is
+  `τ·log|W|`, which is not negligible: with `τ = 0.1` and 8 fully-connected worlds, a nest of
+  necessities floors at depth 5 and the lower bound is then dead. Compute the budget with
+  `box_width_entropy` rather than assuming it. `MultiAgentKripke.K_G` / `K_F` are *two*
+  levels and consume it twice as fast.
+
+- **`functional.until` ignores its accessibility relation.** It is correct for a total order
+  (consecutive time steps) and only for that: `until(φ, ψ, A)` is bit-identical for any `A`,
+  no gradient flows into the relation, and cutting an edge changes nothing. Its Łukasiewicz
+  sweep also loses `1 − L_φ` per step, flooring the lower bound over a long horizon. Use
+  `until_graph` for an arbitrary or learned relation.
+
+- **`until_graph(quantifier="box")` is sound only on a serial frame.** A dead end makes `□U`
+  vacuously true, so a path that simply stops satisfies the formula. Prefer the default
+  `"diamond"` (EU) unless every world is known to have a successor.
+
 ## Citation
 
 If you use torchmodal in your research, please cite:
 
 ```bibtex
-@misc{sulc2025modallogicalneuralnetworks,
-  title={Modal Logical Neural Networks},
-  author={Antonin Sulc},
-  year={2025},
-  eprint={2512.03491},
-  archivePrefix={arXiv},
-  primaryClass={cs.LG},
-  url={https://arxiv.org/abs/2512.03491},
+@inproceedings{sulc2026mlnn,
+  title     = {Modal Logic Neural Networks},
+  author    = {Sulc, Antonin and Naddour, Noor},
+  booktitle = {Proceedings of the 20th Conference on Neurosymbolic
+               Learning and Reasoning (NeSy 2026)},
+  series    = {Proceedings of Machine Learning Research},
+  volume    = {284},
+  year      = {2026},
+  publisher = {PMLR},
+  url       = {https://openreview.net/pdf?id=uLOdtBm0Cx},
+  note      = {Oral presentation. arXiv:2512.03491}
 }
 ```
+
+The proceedings version is the one to cite;
+[arXiv:2512.03491](https://arxiv.org/abs/2512.03491)
+([doi:10.48550/arXiv.2512.03491](https://doi.org/10.48550/arXiv.2512.03491))
+remains available as a secondary identifier. GitHub's *Cite this repository* button reads
+[`CITATION.cff`](CITATION.cff).
 
 ## License
 
 MIT
 
 ## Authors
-[Antonin Sulc](https://sulcantonin.github.io)
+
+- [Antonin Sulc](https://sulcantonin.github.io) — Lawrence Berkeley National Laboratory
+- Noor Naddour — The University of Queensland
+
+Contributions are welcome — see [CONTRIBUTING.md](CONTRIBUTING.md) and the
+[good first issues](https://github.com/sulcantonin/torchmodal/labels/good%20first%20issue).
 
 ## Media
 - Substack https://open.substack.com/pub/sulcantonin/p/the-architecture-of-trust-in-agents?r=2p2sn8&utm_campaign=post&utm_medium=web&showWelcomeOnShare=true

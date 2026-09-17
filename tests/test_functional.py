@@ -156,7 +156,7 @@ class TestUntil:
         phi = torch.tensor([[0.0, 0.0], [0.0, 0.0], [0.0, 0.0]])
         psi = torch.tensor([[1.0, 1.0], [0.0, 0.0], [0.0, 0.0]])
         A = torch.triu(torch.ones(3, 3))
-        result = F.until(phi, psi, A, tau=0.1)
+        result = F.until(phi, psi, A)
         assert result[0, 0].item() >= 0.99
 
     def test_hold_then_goal(self):
@@ -164,7 +164,7 @@ class TestUntil:
         phi = torch.tensor([[1.0, 1.0], [1.0, 1.0], [0.0, 0.0]])
         psi = torch.tensor([[0.0, 0.0], [0.0, 0.0], [1.0, 1.0]])
         A = torch.triu(torch.ones(3, 3))
-        result = F.until(phi, psi, A, tau=0.1)
+        result = F.until(phi, psi, A)
         assert result[0, 0].item() >= 0.99
 
     def test_hold_fails_before_goal(self):
@@ -172,7 +172,7 @@ class TestUntil:
         phi = torch.tensor([[1.0, 1.0], [0.0, 0.0], [0.0, 0.0]])
         psi = torch.tensor([[0.0, 0.0], [0.0, 0.0], [1.0, 1.0]])
         A = torch.triu(torch.ones(3, 3))
-        result = F.until(phi, psi, A, tau=0.1)
+        result = F.until(phi, psi, A)
         assert result[0, 0].item() < 0.5
 
     def test_point_valued(self):
@@ -180,7 +180,7 @@ class TestUntil:
         phi = torch.tensor([1.0, 1.0, 0.0])
         psi = torch.tensor([0.0, 0.0, 1.0])
         A = torch.triu(torch.ones(3, 3))
-        result = F.until(phi, psi, A, tau=0.1)
+        result = F.until(phi, psi, A)
         assert result.shape == (3,)
 
     def test_differentiable(self):
@@ -188,7 +188,7 @@ class TestUntil:
         phi = torch.tensor([[0.8, 0.9], [0.7, 0.8]], requires_grad=True)
         psi = torch.tensor([[0.1, 0.2], [0.9, 1.0]], requires_grad=True)
         A = torch.triu(torch.ones(2, 2))
-        result = F.until(phi, psi, A, tau=0.1)
+        result = F.until(phi, psi, A)
         loss = result.sum()
         loss.backward()
         assert phi.grad is not None

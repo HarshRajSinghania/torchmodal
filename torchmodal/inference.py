@@ -344,7 +344,10 @@ def upward_downward(
             elif node.ftype == FormulaType.UNTIL:
                 hold_b = bounds[node.children[0]]
                 goal_b = bounds[node.children[1]]
-                new_b = F.until(hold_b, goal_b, accessibility, tau=tau)
+                # `tau` is deliberately not forwarded: F.until ignores it
+                # (its backward DP has no smooth aggregation) and passing
+                # it now raises a DeprecationWarning.
+                new_b = F.until(hold_b, goal_b, accessibility)
 
             else:
                 continue
@@ -406,7 +409,8 @@ def upward_downward(
                 # a ∨ b = parent, with parent = min(1, a + b).
                 # Sound Łukasiewicz inverses (and symmetrically for b):
                 #   parent >= a always (b >= 0, a <= 1)  → U_a ← min(U_a, U_parent)
-                #   a + b >= L_parent                    → L_a ← max(L_a, L_parent - U_b)
+                #   a + b >= L_parent                    →
+                #       L_a ← max(L_a, L_parent - U_b)
                 # The lower rule holds whether or not the clamp is active:
                 # min(1, a + b) >= L_parent implies a + b >= L_parent for every
                 # L_parent <= 1.

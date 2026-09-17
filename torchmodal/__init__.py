@@ -2,7 +2,7 @@
 torchmodal — Differentiable Modal Logic for PyTorch
 ====================================================
 
-A PyTorch library implementing Modal Logical Neural Networks (MLNNs),
+A PyTorch library implementing Modal Logic Neural Networks (MLNNs),
 enabling differentiable reasoning over necessity and possibility by
 integrating neural networks with Kripke semantics from modal logic.
 
@@ -54,13 +54,21 @@ Quick Start::
     # Compute contradiction loss
     loss = model.contradiction_loss()
 
-Reference: Sulc (2026), "Modal Logical Neural Networks", NeuS.
+Reference: Sulc & Naddour (2026), "Modal Logic Neural Networks",
+Proceedings of the 20th Conference on Neurosymbolic Learning and
+Reasoning (NeSy 2026), PMLR vol. 284 — oral.
+https://openreview.net/pdf?id=uLOdtBm0Cx
 """
 
 __version__ = "0.2.1"
 
 # Core functional API
-from torchmodal import functional, nn
+from torchmodal import diagnostics, functional, nn
+from torchmodal.diagnostics import (
+    GradientHealthError,
+    assert_has_signal,
+    gradient_health,
+)
 from torchmodal.inference import (
     FormulaGraph,
     FormulaNode,
@@ -99,6 +107,11 @@ __all__ = [
     # Subpackages
     "functional",
     "nn",
+    "diagnostics",
+    # Diagnostics
+    "gradient_health",
+    "assert_has_signal",
+    "GradientHealthError",
     # Kripke model
     "KripkeModel",
     "Proposition",

@@ -5,7 +5,7 @@ build-backend = "setuptools.build_meta"
 [project]
 name = "torchmodal"
 version = "0.2.1"
-description = "Differentiable Modal Logic for PyTorch — Modal Logical Neural Networks (MLNNs)"
+description = "Differentiable modal logic for PyTorch: sound interval bounds and a learnable Kripke accessibility relation (Modal Logic Neural Networks)"
 readme = "README.md"
 license = "MIT"
 license-files = ["LICENSE"]
@@ -14,22 +14,34 @@ authors = [
     {name = "Antonin Sulc", email = "sulc.antonin@gmail.com"},
 ]
 keywords = [
-    "modal-logic",
     "neurosymbolic",
+    "modal-logic",
     "kripke-semantics",
+    "differentiable-logic",
     "differentiable-reasoning",
     "epistemic-logic",
+    "temporal-logic",
+    "fuzzy-logic",
+    "neural-symbolic",
     "pytorch",
 ]
 classifiers = [
     "Development Status :: 3 - Alpha",
     "Intended Audience :: Science/Research",
+    "Intended Audience :: Developers",
+    "Intended Audience :: Education",
+    "Natural Language :: English",
+    "Operating System :: OS Independent",
     "Programming Language :: Python :: 3",
     "Programming Language :: Python :: 3.9",
     "Programming Language :: Python :: 3.10",
     "Programming Language :: Python :: 3.11",
     "Programming Language :: Python :: 3.12",
+    "Programming Language :: Python :: 3.13",
     "Topic :: Scientific/Engineering :: Artificial Intelligence",
+    "Topic :: Scientific/Engineering :: Mathematics",
+    "Topic :: Software Development :: Libraries :: Python Modules",
+    "Typing :: Typed",
 ]
 dependencies = [
     "torch>=2.0",
@@ -43,10 +55,17 @@ dev = [
     "mypy",
     "ruff",
 ]
+docs = [
+    "mkdocs>=1.5",
+    "mkdocs-material>=9.5",
+    "mkdocstrings[python]>=0.24",
+]
 
 [project.urls]
 Homepage = "https://github.com/sulcantonin/torchmodal"
-Documentation = "https://github.com/sulcantonin/torchmodal#readme"
+Documentation = "https://sulcantonin.github.io/torchmodal/"
+Paper = "https://openreview.net/pdf?id=uLOdtBm0Cx"
+Source = "https://github.com/sulcantonin/torchmodal"
 Repository = "https://github.com/sulcantonin/torchmodal"
 Issues = "https://github.com/sulcantonin/torchmodal/issues"
 Changelog = "https://github.com/sulcantonin/torchmodal/blob/main/CHANGELOG.md"

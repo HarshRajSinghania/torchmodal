@@ -2,7 +2,7 @@
 torchmodal.kripke
 ~~~~~~~~~~~~~~~~~
 
-Kripke model and formula graph for Modal Logical Neural Networks.
+Kripke model and formula graph for Modal Logic Neural Networks.
 
 A Kripke model M = ⟨W, R, V⟩ consists of:
 - W: a finite set of possible worlds
