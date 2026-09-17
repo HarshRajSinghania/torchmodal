@@ -42,8 +42,14 @@ and the project adheres to [Semantic Versioning](https://semver.org/).
   endpoints — the dead state of a box neuron is `L = 0` *with* `U = 1`, which
   neither column reveals on its own — and attributes gradients per endpoint.
   A term is reported *dead* when pinned with no gradient, and merely *saturated*
-  when pinned but still differentiable. `assert_has_signal` is the raising
-  variant for tests.
+  when pinned but still differentiable. Neither alone makes a report unhealthy:
+  a sound upper bound that has legitimately reached 1 looks identical, at the
+  term level, to a broken one, and whether the interval clamp passes gradient
+  exactly *at* the boundary is a torch-version convention (2.8 passes 1.0, 2.14
+  passes 0.0). `healthy` keys instead on signals that are unambiguous and stable
+  across versions — a **vacuous** bound spanning the whole interval, no
+  parameter receiving a usable gradient, or a missing autograd path.
+  `assert_has_signal` is the raising variant for tests.
 
 - **`functional.box_width_entropy`** — the per-world interval width that one
   necessity level contributes, `τ·H(softmin weights)`. This is an identity, not
