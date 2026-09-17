@@ -45,6 +45,9 @@ preferred-citation:
     - type: url
       value: "https://openreview.net/pdf?id=uLOdtBm0Cx"
       description: "OpenReview (proceedings version — primary)"
+    - type: doi
+      value: "10.48550/arXiv.2512.03491"
+      description: "arXiv DOI (secondary)"
     - type: other
       value: "arXiv:2512.03491"
       description: "arXiv preprint (secondary)"

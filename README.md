@@ -440,7 +440,9 @@ If you use torchmodal in your research, please cite:
 }
 ```
 
-The proceedings version is the one to cite; [arXiv:2512.03491](https://arxiv.org/abs/2512.03491)
+The proceedings version is the one to cite;
+[arXiv:2512.03491](https://arxiv.org/abs/2512.03491)
+([doi:10.48550/arXiv.2512.03491](https://doi.org/10.48550/arXiv.2512.03491))
 remains available as a secondary identifier. GitHub's *Cite this repository* button reads
 [`CITATION.cff`](CITATION.cff).
 
