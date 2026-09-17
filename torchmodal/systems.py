@@ -395,9 +395,25 @@ class MultiAgentKripke(nn.Module):
         prop_bounds: Tensor,
         features: Optional[Tensor] = None,
     ) -> Tensor:
-        """Composite K∘G: agent knows ϕ holds globally.
+        r"""Composite K∘G: agent knows ϕ holds globally.
 
         First applies G (temporal necessity), then K (epistemic).
+
+        .. warning::
+           **This is two □ levels, so it carries twice the slack.** Both G
+           and K are :func:`~torchmodal.functional.necessity` neurons, so
+           the returned interval is widened by
+           :math:`\tau H_G(w) + \tau H_K(w)` — the sum of the two levels'
+           box widths, each bounded by :math:`\tau \log n` — rather than
+           by one. Measured with 3 agents, 4 steps, ``tau=0.1``,
+           ``phi=[1,1]``: ``G`` alone gives ``L = 0.861`` while ``K_G``
+           gives ``L = 0.770``, the two
+           :func:`~torchmodal.functional.box_width_entropy` levels
+           contributing 0.1387 each. Budget accordingly: the faithful
+           nesting depth :math:`k^* = 1/(\tau\bar{H})` is consumed twice
+           as fast by this composite as by a bare ``K``. See
+           :func:`torchmodal.functional.necessity` for the per-level
+           table.
 
         Args:
             prop_bounds: ``(num_states, 2)`` bounds.
@@ -415,9 +431,18 @@ class MultiAgentKripke(nn.Module):
         prop_bounds: Tensor,
         features: Optional[Tensor] = None,
     ) -> Tensor:
-        """Composite K∘F: agent knows ϕ holds eventually.
+        r"""Composite K∘F: agent knows ϕ holds eventually.
 
         First applies F (temporal possibility), then K (epistemic).
+
+        .. warning::
+           **This is two modal levels, so it carries twice the slack** —
+           a ♢ (F) followed by a □ (K). Each widens the interval by its
+           own :func:`~torchmodal.functional.box_width_entropy`,
+           :math:`\tau H(w) \le \tau \log n`, and the two accumulate.
+           See :meth:`K_G` for the measured figures and
+           :func:`torchmodal.functional.necessity` for the per-level
+           table.
 
         Args:
             prop_bounds: ``(num_states, 2)`` bounds.

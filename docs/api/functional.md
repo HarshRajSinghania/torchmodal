@@ -1,0 +1,3 @@
+# `torchmodal.functional`
+
+::: torchmodal.functional

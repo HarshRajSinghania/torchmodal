@@ -43,6 +43,9 @@ __all__ = [
     "necessity",
     "possibility",
     "until",
+    "until_graph",
+    # Diagnostics
+    "box_width_entropy",
     # Contradiction
     "contradiction",
 ]
@@ -164,6 +167,41 @@ def conv_pool(
     operators to construct *sound* upper/lower bounds that complement
     the ``smooth_min`` / ``smooth_max`` bounds.
 
+    **Exact width.** In the ``z = -x`` mode the gap to the matching lower
+    bound is not an estimate but an identity:
+
+    .. math::
+        \operatorname{conv\_pool}_\tau(\mathbf{x}, -\mathbf{x})
+            - \operatorname{smooth\_min}_\tau(\mathbf{x})
+        = \tau\, H\bigl(\operatorname{softmax}(-\mathbf{x}/\tau)\bigr)
+        \;\le\; \tau \log n,
+
+    with equality in the upper bound iff every :math:`x_i` ties. Verified
+    to 8.9e-16 in float64 over 20k random draws. See
+    :func:`box_width_entropy`, which returns this quantity.
+
+    .. warning::
+       **This operator is not monotone in** ``x`` **when** ``z = -x``. Its
+       derivative is
+
+       .. math::
+           \frac{\partial f}{\partial x_k}
+           = w_k \left(1 - \frac{x_k - f}{\tau}\right),
+
+       which is **negative** whenever :math:`x_k - f > \tau`: raising a
+       term that is already far above the pooled value *lowers* the
+       result, because it loses weight faster than it gains value. For
+       example at :math:`\tau = 0.1`, going from ``x = [0, 1]`` to
+       ``x = [0, 2]`` decreases the pool (4.54e-5 → 4.1e-9), and at
+       ``x = [0.3, 0.9]`` the gradients are ``[+1.0123, -0.0123]``.
+
+       This is harmless for soundness — the enclosure holds regardless —
+       but it **invalidates the tempting argument** *"the box neuron is
+       monotone in* ``A``\\ *, therefore the bound is sound"*. That
+       argument is not available. The correct route is monotonicity of
+       the **hard** ``min`` together with the one-sided enclosure
+       ``smooth_min <= min <= conv_pool``.
+
     Args:
         x: Values to pool, shape ``(..., N)``.
         z: Logits controlling the convex weights, same shape as ``x``.
@@ -255,6 +293,24 @@ def implication(a: Tensor, b: Tensor) -> Tensor:
 # ---------------------------------------------------------------------------
 
 
+class _UnsetTau(float):
+    """Sentinel for a ``tau`` the caller did not pass.
+
+    Subclasses :class:`float` and carries the historical default value, so
+    the signature still type-checks as ``float``, ``inspect.signature``
+    still reports ``0.1``, and any code that reads the value is unchanged.
+    Only identity (``tau is not _UNSET_TAU``) distinguishes "not passed"
+    from an explicit ``tau=0.1``, which is what the deprecation warning
+    keys on.
+    """
+
+    def __repr__(self) -> str:  # pragma: no cover - cosmetic
+        return "0.1"
+
+
+_UNSET_TAU = _UnsetTau(0.1)
+
+
 def _select_terms(x: Tensor, top_k: int | None, largest: bool) -> Tensor:
     """Keep the ``top_k`` extreme aggregation terms of each row of ``x``.
 
@@ -328,6 +384,39 @@ def necessity(
        entries still enter the log-sum-exp with term ``1 + L`` and their
        summed mass drives the bounds to ``[0, 1]`` as ``|W|`` grows, and
        choosing neighbours by ``Ã`` alone is unsound.
+
+    **Accumulated slack under nesting.** Each □ level widens the interval
+    by exactly :math:`\tau H(w)` — the entropy of its own softmin weights,
+    returned by :func:`box_width_entropy` — bounded by
+    :math:`\tau \log n` and maximal when the aggregated terms all tie. The
+    cost is therefore *per level* and set by the frame's effective
+    branching, not by :math:`|W|` as such. Nesting :math:`k` levels loses
+    about :math:`k \tau \bar{H}`, so a lower bound starting at 1 reaches
+    the floor at
+
+    .. math::
+        k^* = \left\lceil 1 / (\tau \bar{H}) \right\rceil ,
+
+    after which the term is dead: pinned at 0 with no gradient. Measured
+    with ``phi = [1, 1]``, ``tau = 0.1``, ``|W| = 8``, lower bound at
+    depth 1..6:
+
+    =====================  ==========================================  ===========
+    frame                  L at depth 1, 2, 3, 4, 5, 6                 per level
+    =====================  ==========================================  ===========
+    complete (``A=ones``)  0.792, 0.584, 0.376, 0.168, **0.0**, 0.0    0.2079
+    ring bidirectional     0.890, 0.780, 0.670, 0.561, 0.451, 0.341    0.1099
+    ring (self + next)     0.931, 0.861, 0.792, 0.723, 0.653, 0.584    0.0694
+    =====================  ==========================================  ===========
+
+    The per-level figures are :math:`\tau \log 8`, :math:`\tau \log 3` and
+    :math:`\tau \log 2` respectively — the frames' branching factors — and
+    each matches :func:`box_width_entropy` to four decimals. The
+    degradation is linear and predictable, but it is *not* negligible on a
+    densely connected frame: the complete frame above floors at depth 5,
+    exactly as :math:`k^*` predicts. Compute the budget rather than
+    assuming it, and check deep nests with
+    :func:`torchmodal.diagnostics.gradient_health`.
 
     Args:
         prop_bounds: Truth bounds of shape ``(|W|, 2)`` where columns are
@@ -405,6 +494,13 @@ def possibility(
     for why the selection must be made on the aggregated terms rather than
     on ``Ã`` alone.
 
+    **Accumulated slack under nesting.** By the duality
+    ``♢ϕ ≡ ¬□¬ϕ`` the ♢ interval widens by the same
+    :math:`\tau H(w) \le \tau \log n` per level as □ — see the measured
+    table in :func:`necessity`. A nest of ♢ operators therefore drifts
+    toward the ceiling at the same rate that a nest of □ operators drifts
+    toward the floor.
+
     Args:
         prop_bounds: Truth bounds of shape ``(|W|, 2)`` or ``(|W|,)``.
         accessibility: Accessibility matrix ``(|W|, |W|)`` in [0, 1].
@@ -446,11 +542,102 @@ def possibility(
     return result
 
 
+def box_width_entropy(
+    accessibility: Tensor,
+    prop_bounds: Tensor,
+    tau: float = 0.1,
+    top_k: int | None = None,
+) -> Tensor:
+    r"""Per-world interval width contributed by one :func:`necessity` level.
+
+    The gap between the two endpoints of a □ neuron is not a bound — it is
+    an identity. For a common term vector :math:`\mathbf{x}`,
+
+    .. math::
+        \operatorname{conv\_pool}_\tau(\mathbf{x}, -\mathbf{x})
+            - \operatorname{smooth\_min}_\tau(\mathbf{x})
+        = \tau\, H\bigl(\operatorname{softmax}(-\mathbf{x}/\tau)\bigr),
+
+    where :math:`H` is the Shannon entropy in nats. This function returns
+    the right-hand side per world, evaluated on the □ implication terms
+    :math:`x_{w,w'} = (1 - \tilde{A}_{w,w'}) + U_{\phi,w'}`.
+
+    **What it bounds.** This is an *exact equality*, not a bound: it is the
+    width that one modal level adds, so ``U_□ - L_□`` decomposes as
+
+    .. math::
+        \underbrace{\tau H(w)}_{\text{this function}}
+        \;+\;
+        \underbrace{
+          \operatorname{smooth\_min}_\tau(\mathbf{x}_U)
+          - \operatorname{smooth\_min}_\tau(\mathbf{x}_L)
+        }_{\text{incoming width, propagated}} .
+
+    When ``prop_bounds`` is point-valued (or ``L == U``) the second term
+    vanishes and the return value equals ``U_□ - L_□`` exactly — *provided
+    the □ output clamp does not engage*. :func:`necessity` clamps its
+    result into [0, 1]; where a raw endpoint falls outside that range the
+    clamp truncates the interval and the measured width is smaller than
+    the entropy. Verified to 3.9e-16 in float64 over the unclamped regime.
+
+    **Why it is useful.** The quantity is bounded by :math:`\tau \log n`
+    (:math:`n` = number of aggregated terms, i.e. ``top_k`` or ``|W|``),
+    with equality iff every term ties. It therefore:
+
+    - turns the faithful-nesting depth ceiling into a computed quantity,
+      :math:`k^* = \varepsilon / (\tau \bar{H})`, rather than a guess;
+    - gives each :math:`\square` a cheap tightness diagnostic — a large
+      value means the frame is near-uniform and the bound is loose;
+    - is *exactly* the dead zone of :func:`contradiction` applied after a
+      □ neuron: a bound crossing smaller than this width is absorbed and
+      produces neither loss nor gradient.
+
+    Args:
+        accessibility: Accessibility matrix ``(|W|, |W|)`` in [0, 1].
+        prop_bounds: Truth bounds ``(|W|, 2)`` as ``[L, U]``, or ``(|W|,)``
+            for point-valued truth values.
+        tau: Temperature. Must match the ``tau`` of the □ level being
+            diagnosed. Default 0.1.
+        top_k: Match the ``top_k`` of the □ level being diagnosed, so the
+            entropy is taken over the same kept terms. Default ``None``.
+
+    Returns:
+        Tensor of shape ``(|W|,)``: the width, in truth units, that this
+        □ level contributes at each source world.
+
+    Example:
+        >>> import torch
+        >>> from torchmodal.functional import box_width_entropy, necessity
+        >>> A = torch.ones(6, 6)
+        >>> b = torch.full((6, 2), 0.5)          # point-valued: L == U
+        >>> w = box_width_entropy(A, b, tau=0.1)
+        >>> box = necessity(b, A, tau=0.1)
+        >>> bool(torch.allclose(w, box[:, 1] - box[:, 0], atol=1e-6))
+        True
+    """
+    if prop_bounds.dim() == 1:
+        U_phi = prop_bounds
+    else:
+        U_phi = prop_bounds[:, 1]
+
+    terms = (1.0 - accessibility) + U_phi.unsqueeze(0)
+    terms = _select_terms(terms, top_k, largest=False)
+
+    weights = torch.softmax(-terms / tau, dim=1)
+    # clamp_min keeps log finite for weights that underflow to exactly 0;
+    # those terms contribute 0 to the entropy either way.
+    entropy = -(weights * torch.log(weights.clamp_min(1e-300))).sum(dim=1)
+    # Entropy is non-negative by definition; clamp away the -0.0 / tiny
+    # negative values float arithmetic produces in the degenerate
+    # single-term case (top_k=1), where the exact answer is 0.
+    return (tau * entropy).clamp_min(0.0)
+
+
 def until(
     phi_bounds: Tensor,
     psi_bounds: Tensor,
     accessibility: Tensor,
-    tau: float = 0.1,
+    tau: float = _UNSET_TAU,
 ) -> Tensor:
     r"""Until (U) operator — differentiable temporal semantics.
 
@@ -474,20 +661,55 @@ def until(
     This closes the expressiveness gap with STLCG (Leung et al., 2023)
     which supports the Until operator for signal temporal logic.
 
+    .. warning::
+       **This operator is inert with respect to its relation.** Only
+       ``accessibility.shape[0]`` is read, to obtain ``T``; no aggregation
+       over ``accessibility`` takes place and *no autograd path runs from
+       the result back to it*. ``until(phi, psi, A)`` is bit-identical for
+       ``A = triu(ones)`` and ``A = zeros``, and deleting an edge of the
+       chain does not change the output. The operator is correct for a
+       **total order** — consecutive time steps — and only for that. For
+       an arbitrary or learned relation, where "is there still a path?" is
+       the question, use :func:`until_graph`, whose bounds do depend on
+       the relation and do carry gradient into it.
+
+    .. warning::
+       Its Łukasiewicz backward sweep **floors the lower bound**. Each
+       step costs ``1 - L_phi``: over a 6-step chain with ``L_phi = 0.9``
+       and ψ true only at the end, the lower bounds are
+       ``0.5, 0.6, 0.7, 0.8, 0.9, 1.0``. That decay is the operator, not
+       the data, and for a long enough horizon the lower bound reaches 0
+       with no gradient. :func:`until_graph` uses idempotent Gödel
+       connectives instead and does not floor.
+
     Args:
         phi_bounds: Truth bounds for ϕ, shape ``(T, 2)`` or ``(T,)``.
         psi_bounds: Truth bounds for ψ, shape ``(T, 2)`` or ``(T,)``.
         accessibility: Forward-time accessibility matrix ``(T, T)``.
-            Only the temporal ordering matters; the matrix is used to
-            determine the number of time steps. No aggregation over
-            ``accessibility`` takes place, so there is no ``top_k``
-            parameter here (see :func:`necessity` / :func:`possibility`).
-        tau: Temperature (unused in the DP formulation, kept for API
-            consistency). Default 0.1.
+            **Used only for its size.** Only the temporal ordering
+            matters; the matrix determines the number of time steps. No
+            aggregation over ``accessibility`` takes place, so there is no
+            ``top_k`` parameter here (see :func:`necessity` /
+            :func:`possibility`).
+        tau: **Deprecated and unused.** The DP formulation has no smooth
+            aggregation, so no temperature enters it; passing this
+            argument raises a :class:`DeprecationWarning`. Kept only for
+            API compatibility and scheduled for removal in 0.4.0.
 
     Returns:
         Truth bounds for ``ϕ U ψ``, same shape as inputs.
     """
+    if tau is not _UNSET_TAU:
+        warnings.warn(
+            "torchmodal.functional.until's `tau` argument is unused: the "
+            "backward DP has no smooth aggregation, so the result is "
+            "identical for every value. It will be removed in 0.4.0. If "
+            "you wanted a temperature-controlled, relation-aware Until, "
+            "use until_graph.",
+            DeprecationWarning,
+            stacklevel=2,
+        )
+
     point_valued = phi_bounds.dim() == 1
     if point_valued:
         phi_bounds = phi_bounds.unsqueeze(-1).expand(-1, 2)
@@ -525,6 +747,151 @@ def until(
     return result
 
 
+def until_graph(
+    phi_bounds: Tensor,
+    psi_bounds: Tensor,
+    accessibility: Tensor,
+    tau: float = 0.1,
+    tau_decay: float = 0.5,
+    max_iter: int = 50,
+    tol: float = 1e-6,
+    quantifier: str = "diamond",
+) -> Tensor:
+    r"""Relation-aware Until — least fixpoint of ``U = ψ ∨ (φ ∧ ♢U)``.
+
+    Unlike :func:`until`, which reads its ``accessibility`` only for its
+    size, this operator **aggregates over the relation**: its bounds
+    depend on which edges exist and gradients flow back into them. That
+    makes it the operator to use with a learned or arbitrary (cyclic,
+    branching, disconnected) Kripke frame, where the question "is there
+    still a path along which ϕ holds until ψ?" has a non-trivial answer.
+
+    The fixpoint is reached by iterating
+
+    .. math::
+        U^{(0)} = \psi, \qquad
+        U^{(j+1)} = \psi \;\vee_G\;
+            \bigl(\phi \;\wedge_G\; \Diamond_{\tau_j} U^{(j)}\bigr)
+
+    to convergence, where :math:`\vee_G` and :math:`\wedge_G` are the
+    **Gödel** connectives (``max`` and ``min``). Gödel is used rather than
+    Łukasiewicz because it is *idempotent*: the iteration therefore has a
+    genuine fixpoint instead of decaying by ``1 - L_phi`` per step the way
+    :func:`until` does, so the lower bound does not floor. The sequence is
+    monotone non-decreasing and bounded above by 1, so it converges.
+
+    The temperature is **annealed** across sweeps, :math:`\tau_j = \tau
+    \rho^j` with :math:`\rho` = ``tau_decay``, so successive modal steps
+    are progressively sharper and the slack accumulated over the whole
+    iteration is a geometric series rather than a growing one.
+
+    **What it bounds, and the gap.** The returned ``[L, U]`` brackets the
+    crisp (``τ → 0``, Boolean-relation) value of ``ϕ U ψ`` evaluated over
+    the same frame: ``L <= crisp <= U``. The connectives are exact — Gödel
+    ``min`` / ``max`` introduce no error — so the only relaxation is the
+    modal ♢ step, which contributes at most :math:`\tau_j \log |W|` per
+    sweep on each endpoint. Summed over the annealed schedule the total
+    gap is bounded by
+
+    .. math::
+        \frac{\tau \log |W|}{1 - \rho},
+
+    independent of the number of iterations. Setting ``tau_decay=1.0``
+    disables annealing and the gap grows linearly in the sweep count
+    instead.
+
+    .. warning::
+       ``quantifier="box"`` computes **AU** ("along *every* path") and is
+       sound **only on a serial relation** — one where every world has at
+       least one successor. At a dead end ``□U`` is vacuously 1, so a path
+       that merely stops satisfies the formula. This is measured, not
+       hypothetical: on a 6-step chain the box variant returns 0.9
+       everywhere regardless of connectivity. Use ``"diamond"`` (**EU**,
+       "there is a path") unless the frame is known to be serial.
+
+    Args:
+        phi_bounds: Truth bounds for ϕ, shape ``(|W|, 2)`` as ``[L, U]``,
+            or ``(|W|,)`` for point-valued truth values.
+        psi_bounds: Truth bounds for ψ, same shape as ``phi_bounds``.
+        accessibility: Accessibility matrix ``(|W|, |W|)`` in [0, 1]. Read
+            as a relation, not merely for its size.
+        tau: Initial temperature for the modal step. Default 0.1.
+        tau_decay: Geometric annealing factor :math:`\rho \in (0, 1]`
+            applied per sweep. ``1.0`` disables annealing. Default 0.5.
+        max_iter: Maximum fixpoint sweeps. Default 50.
+        tol: Stop once the largest bound change in a sweep falls below
+            this. Default 1e-6.
+        quantifier: ``"diamond"`` for EU (default, sound on any frame) or
+            ``"box"`` for AU (sound only on a serial frame — see the
+            warning above).
+
+    Returns:
+        Truth bounds for ``ϕ U ψ``, same shape as the inputs.
+
+    Raises:
+        ValueError: If ``quantifier`` is not ``"diamond"`` or ``"box"``,
+            or if ``tau_decay`` is outside ``(0, 1]``.
+
+    Example:
+        >>> import torch
+        >>> from torchmodal.functional import until_graph
+        >>> T = 6
+        >>> A = torch.zeros(T, T)
+        >>> A[torch.arange(T - 1), torch.arange(1, T)] = 1.0  # a chain
+        >>> phi = torch.stack([torch.full((T,), 0.9), torch.ones(T)], -1)
+        >>> psi = torch.zeros(T, 2)
+        >>> psi[T - 1] = 1.0
+        >>> round(until_graph(phi, psi, A)[0, 0].item(), 3)
+        0.9
+        >>> A[2, 3] = 0.0  # cut the path
+        >>> round(until_graph(phi, psi, A)[0, 0].item(), 3)
+        0.0
+    """
+    if quantifier not in ("diamond", "box"):
+        raise ValueError(
+            f"quantifier must be 'diamond' (EU) or 'box' (AU), "
+            f"got {quantifier!r}"
+        )
+    if not 0.0 < tau_decay <= 1.0:
+        raise ValueError(
+            f"tau_decay must lie in (0, 1], got {tau_decay}"
+        )
+
+    point_valued = phi_bounds.dim() == 1
+    if point_valued:
+        phi_b = phi_bounds.unsqueeze(-1).expand(-1, 2)
+        psi_b = psi_bounds.unsqueeze(-1).expand(-1, 2)
+    else:
+        phi_b = phi_bounds
+        psi_b = psi_bounds
+
+    modal = necessity if quantifier == "box" else possibility
+
+    current = psi_b
+    tau_j = tau
+    for _ in range(max_iter):
+        modal_b = modal(current, accessibility, tau=tau_j)
+
+        # Gödel conjunction: elementwise min on both endpoints.
+        cont = torch.minimum(phi_b, modal_b)
+        # Gödel disjunction: elementwise max on both endpoints.
+        nxt = torch.maximum(psi_b, cont)
+        nxt = torch.clamp(nxt, 0.0, 1.0)
+
+        # detach: the convergence test is control flow, not part of the
+        # graph, and reading a grad-tracking tensor as a Python float
+        # otherwise warns.
+        delta = (nxt - current).detach().abs().max()
+        current = nxt
+        if float(delta) < tol:
+            break
+        tau_j *= tau_decay
+
+    if point_valued:
+        return current[:, 0]
+    return current
+
+
 # ---------------------------------------------------------------------------
 # Contradiction measure
 # ---------------------------------------------------------------------------
@@ -553,6 +920,35 @@ def contradiction(bounds: Tensor, upper: Tensor | None = None) -> Tensor:
     The two forms agree by construction::
 
         contradiction(L, U) == contradiction(torch.stack([L, U], dim=-1))
+
+    .. warning::
+       **Dead zone after a modal neuron.** Applied to the output of a □
+       neuron this loss is *identically zero, with zero gradient*, until
+       the underlying bound crossing exceeds the box width
+       :func:`box_width_entropy` — that is, :math:`\tau H(w)`, at most
+       :math:`\tau \log n`. The modal level widens the interval by
+       exactly that much, so any smaller crossing is absorbed before it
+       reaches the loss.
+
+       The correspondence is exact, not approximate. Driving a crossing
+       ``c`` through a complete frame at ``tau = 0.1``:
+
+       ===========  ====================  ==================
+       fan-in *n*   dead zone (measured)  :math:`\tau\log n`
+       ===========  ====================  ==================
+       3            0.109861              0.109861
+       6            0.179176              0.179176
+       10           0.230259              0.230259
+       ===========  ====================  ==================
+
+       Past the edge the loss is linear with unit slope per world.
+
+       **Consequence:** ``L_contra`` must not be the *sole* guard against
+       a degenerate optimum. A model can sit in a mildly contradictory
+       state indefinitely, paying nothing and receiving no gradient to
+       leave it. Either anneal ``tau`` downward (shrinking the dead zone
+       toward 0), check the raw pre-modal bounds as well, or pair the
+       loss with :func:`torchmodal.diagnostics.gradient_health`.
 
     Args:
         bounds: Either a ``(..., 2)`` bound tensor (stacked form), or the

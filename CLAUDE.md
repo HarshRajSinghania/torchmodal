@@ -1,8 +1,11 @@
 # CLAUDE.md — torchmodal
 
-> **Modal Logical Neural Networks (MLNNs)**: a neurosymbolic framework integrating deep learning
+> **Modal Logic Neural Networks (MLNNs)**: a neurosymbolic framework integrating deep learning
 > with Kripke-style modal logic (necessity □, possibility ♢, and until U) over a set of possible worlds.
-> Paper: *Modal Logical Neural Networks*, Antonin Sulc, Lawrence Berkeley National Lab (arXiv:2512.03491v2).
+> Paper: *Modal Logic Neural Networks*, Antonin Sulc (Lawrence Berkeley National Laboratory)
+> and Noor Naddour (The University of Queensland). **Oral, NeSy 2026** (20th Conference on
+> Neurosymbolic Learning and Reasoning), PMLR vol. 284.
+> <https://openreview.net/pdf?id=uLOdtBm0Cx> · arXiv:2512.03491 (secondary).
 
 ---
 
@@ -232,12 +235,17 @@ Key invariants to assert in tests:
 ## Reference
 
 ```bibtex
-@article{sulc2025mlnn,
-  title   = {Modal Logical Neural Networks},
-  author  = {Sulc, Antonin},
-  journal = {arXiv preprint arXiv:2512.03491},
-  year    = {2025},
-  url     = {https://arxiv.org/abs/2512.03491}
+@inproceedings{sulc2026mlnn,
+  title     = {Modal Logic Neural Networks},
+  author    = {Sulc, Antonin and Naddour, Noor},
+  booktitle = {Proceedings of the 20th Conference on Neurosymbolic
+               Learning and Reasoning (NeSy 2026)},
+  series    = {Proceedings of Machine Learning Research},
+  volume    = {284},
+  year      = {2026},
+  publisher = {PMLR},
+  url       = {https://openreview.net/pdf?id=uLOdtBm0Cx},
+  note      = {Oral presentation. arXiv:2512.03491}
 }
 ```
 

@@ -5,17 +5,46 @@ type: software
 authors:
   - family-names: Sulc
     given-names: Antonin
+    affiliation: "Lawrence Berkeley National Laboratory"
+  - family-names: Naddour
+    given-names: Noor
+    affiliation: "The University of Queensland"
 repository-code: "https://github.com/sulcantonin/torchmodal"
+url: "https://github.com/sulcantonin/torchmodal"
 license: MIT
+keywords:
+  - neurosymbolic
+  - modal-logic
+  - kripke-semantics
+  - differentiable-logic
+  - epistemic-logic
+  - temporal-logic
+  - fuzzy-logic
+  - neural-symbolic
+  - pytorch
 preferred-citation:
-  type: article
-  title: "Modal Logical Neural Networks"
+  type: conference-paper
+  title: "Modal Logic Neural Networks"
   authors:
     - family-names: Sulc
       given-names: Antonin
-  year: 2025
-  url: "https://arxiv.org/abs/2512.03491"
+      affiliation: "Lawrence Berkeley National Laboratory"
+    - family-names: Naddour
+      given-names: Noor
+      affiliation: "The University of Queensland"
+  collection-title: "Proceedings of the 20th Conference on Neurosymbolic Learning and Reasoning (NeSy 2026)"
+  collection-type: proceedings
+  conference:
+    name: "20th Conference on Neurosymbolic Learning and Reasoning (NeSy 2026)"
+  publisher:
+    name: "PMLR"
+  volume: 284
+  year: 2026
+  url: "https://openreview.net/pdf?id=uLOdtBm0Cx"
   identifiers:
+    - type: url
+      value: "https://openreview.net/pdf?id=uLOdtBm0Cx"
+      description: "OpenReview (proceedings version — primary)"
     - type: other
       value: "arXiv:2512.03491"
-      description: "arXiv preprint"
+      description: "arXiv preprint (secondary)"
